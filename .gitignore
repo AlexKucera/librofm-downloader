@@ -122,3 +122,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Project-specific
+secrets.yaml
+download_history.json
+*.partial
