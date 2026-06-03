@@ -1,0 +1,4 @@
+librofm:
+  format: m4b_mp3_fallback
+  output_dir: ./audiobooks
+  workers: -1

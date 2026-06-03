@@ -16,6 +16,7 @@ class Config:
     output_dir: str
     download_extras: bool
     download_covers: bool
+    workers: int = 3
 
 
 class ConfigError(Exception):
@@ -32,6 +33,10 @@ class MissingFieldError(ConfigError):
 
 class InvalidFormatError(ConfigError):
     """Invalid audio format value."""
+
+
+class InvalidWorkersError(ConfigError):
+    """Invalid parallel download worker count."""
 
 
 def load_config(config_path: Path | str, secrets_path: Path | str) -> Config:
@@ -59,6 +64,10 @@ def load_config(config_path: Path | str, secrets_path: Path | str) -> Config:
     # Validate format
     _validate_format(librofm.get("format", "m4b_mp3_fallback"))
 
+    # Validate workers (if explicitly set)
+    if "workers" in librofm:
+        _validate_workers(librofm["workers"])
+
     return Config(
         username=librofm["username"],
         password=librofm["password"],
@@ -66,6 +75,7 @@ def load_config(config_path: Path | str, secrets_path: Path | str) -> Config:
         output_dir=librofm.get("output_dir", "./audiobooks"),
         download_extras=librofm.get("download_extras", True),
         download_covers=librofm.get("download_covers", True),
+        workers=librofm.get("workers", 3),
     )
 
 
@@ -110,4 +120,12 @@ def _validate_format(fmt: str) -> None:
     if fmt not in VALID_FORMATS:
         raise InvalidFormatError(
             f"Invalid format '{fmt}'. Valid formats: {', '.join(sorted(VALID_FORMATS))}."
+        )
+
+
+def _validate_workers(workers: int) -> None:
+    """Raise InvalidWorkersError if workers is less than 1."""
+    if not isinstance(workers, int) or workers < 1:
+        raise InvalidWorkersError(
+            f"Invalid workers value '{workers}'. Must be an integer >= 1."
         )

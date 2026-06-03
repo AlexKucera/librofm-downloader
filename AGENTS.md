@@ -8,6 +8,7 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
 |------|------|------|---------|
+| 2026-06-03 | issue | [20260603-slice-1-workers-config-and-cli-flag-issue12_log.md](docs/devlog/20260603-slice-1-workers-config-and-cli-flag-issue12_log.md) | **Issue #12 Complete:** `workers` config field + `-w`/`--workers` CLI flag with 3-layer resolution (CLI > config > 3). `InvalidWorkersError` validation. **6 new tests, 179 total** · **7/7 AC** |
 | 2026-06-03 | issue | [20260603-issue10-documentation-site-and-readme_log.md](docs/devlog/20260603-issue10-documentation-site-and-readme_log.md) | **Issue #10 Complete:** MkDocs site (8 pages) + polished README. Material theme, flat URLs. **11/11 AC** · **172 tests pass** |
 | 2026-06-03 | slice | [20260603-slice-6b-summary-exit-codes-and-integration-tests-issue9_log.md](docs/devlog/20260603-slice-6b-summary-exit-codes-and-integration-tests-issue9_log.md) | **Issue #9 Complete:** Enhanced summary (failed/skipped book details) + graceful Ctrl+C (exit 130) + 3 integration tests. **12 new tests, 168 total** · **15/15 AC** |
 | 2026-06-03 | issue | [20260603-output-polish-progress-bars-and-failure-isolation-issue8_log.md](docs/devlog/20260603-output-polish-progress-bars-and-failure-isolation-issue8_log.md) | **Issue #8 Complete:** TTY-aware download reporting — rich progress bars (interactive) + plain log lines (cron). Per-book failure isolation. Content-Length → live %/ETA/speed. **18 new tests, 156 total** · **8/8 AC** |

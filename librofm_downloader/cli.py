@@ -20,6 +20,7 @@ def run(
     history_path: str = "download_history.json",
     verbose: bool = False,
     limit: int = 0,
+    workers: int = 0,
 ) -> int:
     """Main pipeline: load config → auth → fetch library → filter → download → summary.
 
@@ -28,10 +29,12 @@ def run(
         secrets_path: Path to secrets.yaml (gitignored).
         history_path: Path to download_history.json.
         verbose: Print extra detail (URLs, paths, API responses).
+        limit: Maximum number of books to download (0 = no limit).
+        workers: Parallel download worker count (0 = use config value).
 
     Returns:
         Exit code: 0 on success, 1 on fatal error, 130 on Ctrl+C interrupt.
-    """
+        """
 
     try:
         if verbose:
@@ -52,6 +55,12 @@ def run(
             console.print(f"  output:   {config.output_dir}")
             console.print(f"  extras:   {config.download_extras}")
             console.print(f"  covers:   {config.download_covers}")
+            console.print(f"  user:     {config.username}")
+
+        # Resolve workers: CLI flag (>0?) → config.workers → default 3
+        resolved_workers = workers if workers > 0 else config.workers
+        if resolved_workers < 1:
+            resolved_workers = 3
             console.print(f"  user:     {config.username}")
 
         # 2. Authenticate
@@ -199,6 +208,14 @@ if __name__ == "__main__":
         metavar="N",
         help="Maximum number of books to download (0 = no limit). Useful for testing.",
     )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Parallel download workers (0 = use config value). Default: 3.",
+    )
     args = parser.parse_args()
 
     sys.exit(run(
@@ -207,4 +224,5 @@ if __name__ == "__main__":
         history_path=args.history,
         verbose=args.verbose,
         limit=args.limit,
+        workers=args.workers,
     ))
