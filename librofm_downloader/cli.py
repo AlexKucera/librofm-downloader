@@ -141,6 +141,7 @@ def run(
                 output_base=config.output_dir,
                 history=history,
                 format_strategy=config.format,
+                config=config,
             )
             if result is None:
                 console.print(f"    [yellow]⏭ Skipped[/yellow]")

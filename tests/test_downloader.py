@@ -2,17 +2,20 @@
 
 import httpx
 import pytest
+import unittest
 from pathlib import Path
 import tempfile
 
 from librofm_downloader.downloader import (
     Book,
     needs_subdirectory,
+    _resolve_output_dir,
     resolve_path,
     sanitize,
     download_m4b,
     download_zip_part,
     download_book,
+    download_accompanying_files,
 )
 from librofm_downloader.client import LibroFmClient
 from librofm_downloader.history import DownloadHistory
@@ -1140,3 +1143,318 @@ class TestFormatStrategy:
             assert len(manifest_calls) == 0
             # No history entry
             assert history.is_downloaded("9780000000000") is False
+
+
+# ---------------------------------------------------------------------------
+# Accompanying files download — Issue #7
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadAccompanyingFiles:
+    """PDF extras and cover art download with config toggles and .partial pattern."""
+
+    def test_downloads_cover_art_to_correct_location(self):
+        """Book with cover_url → downloads image into book's output directory."""
+        cover_payload = b"fake-jpeg-cover-data"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=cover_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+
+        book = Book(
+            title="Book With Cover",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9789999999999",
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            from librofm_downloader.config import Config
+            config = Config(
+                username="u", password="p", format="m4b_mp3_fallback",
+                output_dir=str(tmpdir), download_extras=True, download_covers=True,
+            )
+
+            download_accompanying_files(book, output_dir, config, transport=transport)
+
+            # Cover file exists in output directory
+            cover_path = output_dir / "cover.jpg"
+            assert cover_path.exists()
+            assert cover_path.read_bytes() == cover_payload
+
+    def test_downloads_pdf_extra_to_correct_location(self):
+        """Book with pdf_extras → downloads PDF into book's output directory."""
+        pdf_payload = b"fake-pdf-data-for-map"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=pdf_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+
+        book = Book(
+            title="Book With Map",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9788888888888",
+            pdf_extras=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            from librofm_downloader.config import Config
+            config = Config(
+                username="u", password="p", format="m4b_mp3_fallback",
+                output_dir=str(tmpdir), download_extras=True, download_covers=True,
+            )
+
+            # Create a mock client that returns a PDF URL
+            mock_client = unittest.mock.MagicMock()
+            mock_client.fetch_pdf_extra_url.return_value = "https://cdn.example.com/map.pdf"
+
+            downloaded = download_accompanying_files(book, output_dir, config, client=mock_client, transport=transport)
+
+            # PDF file exists in output directory
+            pdf_path = output_dir / "map.pdf"
+            assert pdf_path.exists()
+            assert pdf_path.read_bytes() == pdf_payload
+
+    def test_uses_partial_file_then_atomic_rename(self):
+        """Cover download writes .partial first, then renames atomically."""
+        cover_payload = b"cover-data-for-partial-test"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=cover_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+
+        book = Book(
+            title="Partial Test Book",
+            authors=["Author"],
+            narrators=["Narrator"],
+            isbn="9780000000001",
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            from librofm_downloader.config import Config
+            config = Config(
+                username="u", password="p", format="m4b_mp3_fallback",
+                output_dir=str(tmpdir), download_extras=True, download_covers=True,
+            )
+
+            download_accompanying_files(book, output_dir, config, transport=transport)
+
+            # Final file exists
+            final_path = output_dir / "cover.jpg"
+            assert final_path.exists()
+
+            # No .partial file left behind
+            partial_path = output_dir / "cover.jpg.partial"
+            assert not partial_path.exists()
+
+    def test_download_extras_false_skips_pdf(self):
+        """download_extras=False → no PDF download even when book has pdf_extras."""
+        mock_client = unittest.mock.MagicMock()
+        mock_client.fetch_pdf_extra_url.return_value = "https://cdn.example.com/map.pdf"
+
+        book = Book(
+            title="Extras Disabled Book",
+            authors=["Author"],
+            narrators=["Narrator"],
+            isbn="9781111111111",
+            pdf_extras=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            from librofm_downloader.config import Config
+            config = Config(
+                username="u", password="p", format="m4b_mp3_fallback",
+                output_dir=str(tmpdir), download_extras=False, download_covers=True,
+            )
+
+            downloaded = download_accompanying_files(book, output_dir, config, client=mock_client)
+
+            # No files downloaded (no cover URL either)
+            assert len(downloaded) == 0
+
+            # Client was never called for PDF URL
+            mock_client.fetch_pdf_extra_url.assert_not_called()
+
+    def test_download_covers_false_skips_cover(self):
+        """download_covers=False → no cover download even when book has cover_url."""
+        book = Book(
+            title="Covers Disabled Book",
+            authors=["Author"],
+            narrators=["Narrator"],
+            isbn="9782222222222",
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            from librofm_downloader.config import Config
+            config = Config(
+                username="u", password="p", format="m4b_mp3_fallback",
+                output_dir=str(tmpdir), download_extras=True, download_covers=False,
+            )
+
+            downloaded = download_accompanying_files(book, output_dir, config)
+
+            # No files downloaded (no PDF extras either)
+            assert len(downloaded) == 0
+
+            # No cover file on disk
+            assert not (output_dir / "cover.jpg").exists()
+
+    def test_cover_download_failure_logs_warning_no_exception(self):
+        """Cover download failure → logs warning, returns empty list, no exception."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Simulate server error
+            return httpx.Response(500)
+
+        transport = httpx.MockTransport(handler)
+
+        book = Book(
+            title="Failing Cover Book",
+            authors=["Author"],
+            narrators=["Narrator"],
+            isbn="9783333333333",
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            from librofm_downloader.config import Config
+            config = Config(
+                username="u", password="p", format="m4b_mp3_fallback",
+                output_dir=str(tmpdir), download_extras=True, download_covers=True,
+            )
+
+            # Should NOT raise — failure is non-critical
+            result = download_accompanying_files(book, output_dir, config, transport=transport)
+
+            # Returns empty list (nothing downloaded)
+            assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Output structure integration — Issue #7
+# ---------------------------------------------------------------------------
+
+
+class TestOutputStructure:
+    """Integration tests for output directory structure with/without extras."""
+
+    def test_book_with_extras_creates_subdirectory(self):
+        """Book with cover_url → needs_subdirectory=True, output is a folder."""
+        book = Book(
+            title="Book With Extras",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9785555555555",
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        # Book with accompanying files should need subdirectory
+        assert needs_subdirectory(book) is True
+
+    def test_book_without_extras_is_flat(self):
+        """Book without cover or PDF → needs_subdirectory=False, output is leaf file."""
+        book = Book(
+            title="Standalone Book",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9786666666666",
+        )
+
+        # Book without accompanying files should be flat
+        assert needs_subdirectory(book) is False
+
+    def test_resolve_output_dir_creates_subdir_for_extras(self):
+        """_resolve_output_dir creates subdirectory when book has extras."""
+        book = Book(
+            title="Subdir Book",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9787777777777",
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "audiobooks"
+            output_dir = _resolve_output_dir(book, base)
+
+            # Should return a subdirectory path (not the base itself)
+            assert output_dir != base
+            assert output_dir.is_relative_to(base)
+
+            # Creating it should work
+            output_dir.mkdir(parents=True, exist_ok=True)
+            assert output_dir.is_dir()
+
+    def test_resolve_output_dir_flat_for_no_extras(self):
+        """_resolve_output_dir returns flat path when no extras (audio is leaf file)."""
+        book = Book(
+            title="Flat Book",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9788888888888",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "audiobooks"
+            output_dir = _resolve_output_dir(book, base)
+
+            # Flat layout: no extra book-level subdirectory for the audio file
+            # The audio filename will be the leaf node in this directory
+            assert output_dir == base / "Author Name"
+        """PDF fetch/download failure → logs warning, continues without PDF."""
+        mock_client = unittest.mock.MagicMock()
+        mock_client.fetch_pdf_extra_url.side_effect = Exception("API error")
+
+        book = Book(
+            title="Failing PDF Book",
+            authors=["Author"],
+            narrators=["Narrator"],
+            isbn="9784444444444",
+            pdf_extras=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            from librofm_downloader.config import Config
+            config = Config(
+                username="u", password="p", format="m4b_mp3_fallback",
+                output_dir=str(tmpdir), download_extras=True, download_covers=True,
+            )
+
+            # Should NOT raise — failure is non-critical
+            result = download_accompanying_files(book, output_dir, config, client=mock_client)
+
+            # Returns empty list (nothing downloaded)
+            assert result == []

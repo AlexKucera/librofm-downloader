@@ -279,3 +279,51 @@ class TestFetchDownloadManifest:
 
         with pytest.raises(M4BUnavailableError):
             client.fetch_download_manifest("9780000000001", transport=transport)
+
+
+# ---------------------------------------------------------------------------
+# PDF extra download URL — Issue #7
+# ---------------------------------------------------------------------------
+
+
+class TestFetchPdfExtraUrl:
+    """PDF extra download URL — GET /api/v10/library/{isbn}/pdf_extra_url?filename=."""
+
+    def test_returns_pdf_url_when_available(self):
+        """Book with PDF extra available → returns CDN URL string."""
+        client = LibroFmClient(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/library/9781234567890/pdf_extra_url":
+                assert request.url.params.get("filename") == "map.pdf"
+                return httpx.Response(
+                    200,
+                    json={"pdf_url": "https://cdn.libro.fm/pdf/9781234567890/map.pdf"},
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client.authenticate(transport=transport)
+        url = client.fetch_pdf_extra_url("9781234567890", "map.pdf", transport=transport)
+
+        assert url == "https://cdn.libro.fm/pdf/9781234567890/map.pdf"
+
+    def test_raises_auth_error_if_not_authenticated(self):
+        """Calling fetch_pdf_extra_url before authenticate → clear error."""
+        client = LibroFmClient(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+        )
+
+        with pytest.raises(AuthError, match="Not authenticated"):
+            client.fetch_pdf_extra_url("9781234567890", "map.pdf")

@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 12 new tests covering M4B query, streaming download, resume, path
   integration, subdirectory logic, history post-download, skip behavior,
   and verbose output (109 total)
+- PDF extras and cover art download: `fetch_pdf_extra_url()` client
+  endpoint, `download_accompanying_files()` with config toggles
+  (`download_extras`, `download_covers`), streaming .partial → atomic
+  rename pattern, non-critical failure handling (warnings only), and
+  output structure verification (subdirectory vs flat layout)
+- 12 new tests covering PDF URL fetch, cover/PDF download, .partial
+  cleanup, config toggle behavior, failure handling, and directory layout
+  (134 total)
 
 ### Fixed
 - Library endpoint key mismatch: API returns "audiobooks" not "books"

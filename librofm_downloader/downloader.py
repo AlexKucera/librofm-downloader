@@ -323,6 +323,7 @@ def download_book(
     output_base: Path | str,
     history: "DownloadHistory",
     format_strategy: str = "m4b_mp3_fallback",
+    config: "Config | None" = None,
     transport: httpx.BaseTransport | None = None,
 ) -> Path | None:
     """Orchestrate a single book download with format strategy.
@@ -333,6 +334,7 @@ def download_book(
         output_base: Base directory for downloads.
         history: DownloadHistory instance to record successful downloads.
         format_strategy: One of ``m4b_mp3_fallback``, ``mp3_only``, ``m4b_only``.
+        config: Optional Config for accompanying file settings.
         transport: Optional httpx transport override for testing.
 
     Returns:
@@ -352,16 +354,24 @@ def download_book(
             m4b_path = output_dir / f"{title_sanitized}.m4b"
             result = download_m4b(m4b_url, m4b_path, transport=transport)
             _write_history(history, book, "m4b", str(result))
+            if config:
+                download_accompanying_files(book, output_dir, config, client=client, transport=transport)
             return result
         except M4BUnavailableError:
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
         # Fall back to MP3
-        return _download_mp3(book, client, output_dir, history, transport)
+        result = _download_mp3(book, client, output_dir, history, transport)
+        if result and config:
+            download_accompanying_files(book, output_dir, config, client=client, transport=transport)
+        return result
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
-        return _download_mp3(book, client, output_dir, history, transport)
+        result = _download_mp3(book, client, output_dir, history, transport)
+        if result and config:
+            download_accompanying_files(book, output_dir, config, client=client, transport=transport)
+        return result
 
     # --- m4b_only: skip book if M4B unavailable ---
     if format_strategy == "m4b_only":
@@ -371,6 +381,8 @@ def download_book(
             m4b_path = output_dir / f"{title_sanitized}.m4b"
             result = download_m4b(m4b_url, m4b_path, transport=transport)
             _write_history(history, book, "m4b", str(result))
+            if config:
+                download_accompanying_files(book, output_dir, config, client=client, transport=transport)
             return result
         except M4BUnavailableError:
             logger.info("Skipping %s (%s): no M4B available (m4b_only mode)", book.title, book.isbn)
@@ -410,6 +422,133 @@ def _download_mp3(
         return output_dir
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Accompanying files download — Issue #7
+# ---------------------------------------------------------------------------
+
+import tempfile as _tempfile
+from urllib.parse import urlparse as _urlparse
+
+
+def _cover_filename_from_url(url: str) -> str:
+    """Derive a cover filename from URL, defaulting to 'cover.jpg'."""
+    parsed = _urlparse(url)
+    name = Path(parsed.path).name or "cover.jpg"
+    return sanitize(name)
+
+
+def _download_cover(
+    url: str,
+    output_dir: Path,
+    transport: httpx.BaseTransport | None = None,
+) -> Path | None:
+    """Download a cover art file via streaming .partial → atomic rename.
+
+    Returns Path on success, None on failure (logs warning).
+    """
+    filename = _cover_filename_from_url(url)
+    output_path = output_dir / filename
+    partial_path = output_path.with_suffix(output_path.suffix + ".partial")
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        client = httpx.Client(transport=transport, follow_redirects=True)
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with open(partial_path, "wb") as f:
+                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                    f.write(chunk)
+
+        partial_path.rename(output_path)
+        logger.info("Downloaded cover → %s", output_path)
+        return output_path
+    except Exception as exc:
+        logger.warning("Failed to download cover from %s: %s", url, exc)
+        # Clean up partial file if it exists
+        partial_path.unlink(missing_ok=True)
+        return None
+
+
+def _download_pdf(
+    url: str,
+    filename: str,
+    output_dir: Path,
+    transport: httpx.BaseTransport | None = None,
+) -> Path | None:
+    """Download a PDF extra file via streaming .partial → atomic rename.
+
+    Returns Path on success, None on failure (logs warning).
+    """
+    safe_name = sanitize(filename)
+    output_path = output_dir / safe_name
+    partial_path = output_path.with_suffix(output_path.suffix + ".partial")
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        client = httpx.Client(transport=transport, follow_redirects=True)
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with open(partial_path, "wb") as f:
+                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                    f.write(chunk)
+
+        partial_path.rename(output_path)
+        logger.info("Downloaded PDF extra → %s", output_path)
+        return output_path
+    except Exception as exc:
+        logger.warning("Failed to download PDF from %s: %s", url, exc)
+        partial_path.unlink(missing_ok=True)
+        return None
+
+
+def download_accompanying_files(
+    book: Book,
+    output_dir: Path | str,
+    config: "Config",
+    client: "LibroFmClient | None" = None,
+    transport: httpx.BaseTransport | None = None,
+) -> list[Path]:
+    """Download PDF extras and/or cover art for a book.
+
+    Non-critical: failures log warnings but do not raise.
+
+    Args:
+        book: The book metadata.
+        output_dir: Directory where accompanying files are placed.
+        config: Config with download_extras / download_covers toggles.
+        client: Optional LibroFmClient for fetching PDF URLs.
+        transport: Optional httpx transport override for testing.
+
+    Returns:
+        List of Paths successfully downloaded.
+    """
+    from librofm_downloader.client import LibroFmClient
+
+    output_dir = Path(output_dir)
+    downloaded: list[Path] = []
+
+    # Download cover art if enabled and available
+    if config.download_covers and book.cover_url:
+        result = _download_cover(book.cover_url, output_dir, transport=transport)
+        if result:
+            downloaded.append(result)
+
+    # Download PDF extras if enabled and available
+    if config.download_extras and book.pdf_extras and client is not None:
+        try:
+            pdf_url = client.fetch_pdf_extra_url(book.isbn, "map.pdf", transport=transport)
+            if pdf_url:
+                result = _download_pdf(pdf_url, "map.pdf", output_dir, transport=transport)
+                if result:
+                    downloaded.append(result)
+        except Exception as exc:
+            logger.warning("Failed to fetch PDF URL for %s: %s", book.isbn, exc)
+
+    return downloaded
 
 
 def _write_history(

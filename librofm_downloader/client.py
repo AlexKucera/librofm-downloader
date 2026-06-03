@@ -176,3 +176,40 @@ class LibroFmClient:
 
         resp.raise_for_status()
         return resp.json()
+
+    def fetch_pdf_extra_url(
+        self,
+        isbn: str,
+        filename: str,
+        transport: httpx.BaseTransport | None = None,
+    ) -> str:
+        """Fetch the PDF extra download URL for a given ISBN and filename.
+
+        Args:
+            isbn: The ISBN of the audiobook.
+            filename: The name of the PDF file to fetch.
+            transport: Optional httpx transport override for testing.
+
+        Returns:
+            The CDN URL string for the PDF file.
+
+        Raises:
+            AuthError: If not authenticated.
+        """
+        if not self._access_token:
+            raise AuthError("Not authenticated. Call authenticate() first.")
+
+        headers = {**self.DEFAULT_HEADERS, "Authorization": f"Bearer {self._access_token}"}
+
+        client = httpx.Client(
+            base_url=self._base_url,
+            headers=headers,
+            timeout=self._timeout,
+            transport=transport,
+        )
+
+        resp = client.get(f"/api/v10/library/{isbn}/pdf_extra_url", params={"filename": filename})
+
+        resp.raise_for_status()
+        data = resp.json()
+        return data["pdf_url"]
