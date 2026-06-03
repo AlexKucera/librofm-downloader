@@ -1,6 +1,12 @@
-"""HTTP client for Libro.fm API — auth and library fetch."""
+"""HTTP client for Libro.fm API — auth, library fetch, and rate-limited downloads."""
+
+import threading
 
 import httpx
+
+# Maximum concurrent Libro.fm API calls (not CDN downloads).
+# Configurable constant — not user-facing.
+API_SEMAPHORE_CAPACITY = 3
 
 
 class AuthError(Exception):
@@ -31,6 +37,7 @@ class LibroFmClient:
         self._password = password
         self._timeout = timeout
         self._access_token: str | None = None
+        self._api_semaphore = threading.Semaphore(API_SEMAPHORE_CAPACITY)
 
     def authenticate(self, transport: httpx.BaseTransport | None = None) -> str:
         """OAuth2 password grant → returns access_token.
@@ -129,14 +136,15 @@ class LibroFmClient:
             transport=transport,
         )
 
-        resp = client.get(f"/api/v10/audiobooks/{isbn}/packaged_m4b")
+        with self._api_semaphore:
+            resp = client.get(f"/api/v10/audiobooks/{isbn}/packaged_m4b")
 
-        if resp.status_code == 404:
-            raise M4BUnavailableError(f"M4B not available for ISBN {isbn}")
+            if resp.status_code == 404:
+                raise M4BUnavailableError(f"M4B not available for ISBN {isbn}")
 
-        resp.raise_for_status()
-        data = resp.json()
-        return data["m4b_url"]
+            resp.raise_for_status()
+            data = resp.json()
+            return data["m4b_url"]
 
     def fetch_download_manifest(
         self,
@@ -169,13 +177,14 @@ class LibroFmClient:
             transport=transport,
         )
 
-        resp = client.get("/api/v10/download-manifest", params={"isbn": isbn})
+        with self._api_semaphore:
+            resp = client.get("/api/v10/download-manifest", params={"isbn": isbn})
 
-        if resp.status_code == 404:
-            raise M4BUnavailableError(f"MP3 manifest not available for ISBN {isbn}")
+            if resp.status_code == 404:
+                raise M4BUnavailableError(f"MP3 manifest not available for ISBN {isbn}")
 
-        resp.raise_for_status()
-        return resp.json()
+            resp.raise_for_status()
+            return resp.json()
 
     def fetch_pdf_extra_url(
         self,
@@ -208,8 +217,9 @@ class LibroFmClient:
             transport=transport,
         )
 
-        resp = client.get(f"/api/v10/library/{isbn}/pdf_extra_url", params={"filename": filename})
+        with self._api_semaphore:
+            resp = client.get(f"/api/v10/library/{isbn}/pdf_extra_url", params={"filename": filename})
 
-        resp.raise_for_status()
-        data = resp.json()
-        return data["pdf_url"]
+            resp.raise_for_status()
+            data = resp.json()
+            return data["pdf_url"]
