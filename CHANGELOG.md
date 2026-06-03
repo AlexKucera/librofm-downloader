@@ -10,3 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial project scaffolding: pyproject.toml, package structure, test suite
 - Config module with YAML loading, secrets deep-merge, validation, and defaults
+- OAuth2 client with password grant auth and paginated library fetch
+- Download history tracking with corrupt JSON recovery
+- CLI skeleton wiring config → auth → library → filter → print
