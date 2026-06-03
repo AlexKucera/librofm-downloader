@@ -8,6 +8,7 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
 |------|------|------|---------|
+| 2026-06-03 | issue | [20260603-parallel-download-orchestrator-issue16_log.md](docs/devlog/20260603-parallel-download-orchestrator-issue16_log.md) | **Issue #16 Complete:** `orchestrator.py` — `ThreadPoolExecutor` parallel download engine. Replaces sequential for-loop in cli.py. `OrchestratorResult` dataclass, stable-sort ordering, failure isolation. **20 new tests, 218 total** · **11/11 AC** |
 | 2026-06-03 | issue | [20260603-api-rate-limiter-issue15_log.md](docs/devlog/20260603-api-rate-limiter-issue15_log.md) | **Issue #15 Complete:** `threading.Semaphore(3)` API rate limiter on `LibroFmClient`. Caps concurrent API calls; CDN downloads bypass. **4 new tests, 198 total** · **6/6 AC** |
 | 2026-06-03 | issue | [20260603-multi-bar-progress-per-book-identity-mapping-issue14_log.md](docs/devlog/20260603-multi-bar-progress-per-book-identity-mapping-issue14_log.md) | **Issue #14 Complete:** Per-book identity mapping for concurrent progress bars. `_tasks`/`_book_ids` dicts, `start_download()` returns `task_id`, `update(task_id=)` targeting. **10 new tests, 194 total** · **7/7 AC** |
 | 2026-06-03 | issue | [20260603-thread-safe-downloadhistory-write-issue13_log.md](docs/devlog/20260603-thread-safe-downloadhistory-write-issue13_log.md) | **Issue #13 Complete:** Thread-safe `DownloadHistory.write()` with `threading.Lock`. **5 new tests, 184 total** · **4/4 AC** |
