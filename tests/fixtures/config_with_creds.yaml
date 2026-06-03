@@ -1,0 +1,4 @@
+librofm:
+  username: bad_user
+  password: bad_pass
+  format: m4b_mp3_fallback

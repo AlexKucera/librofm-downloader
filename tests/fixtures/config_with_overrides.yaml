@@ -1,0 +1,5 @@
+librofm:
+  format: mp3_only
+  output_dir: /tmp/books
+  download_extras: false
+  download_covers: false

@@ -1,0 +1,5 @@
+librofm:
+  format: m4b_mp3_fallback
+  output_dir: ./audiobooks
+  download_extras: true
+  download_covers: true
