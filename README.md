@@ -17,6 +17,7 @@ No Docker. No JVM. Just `pip install` and go.
 - **TTY-aware progress** — rich progress bars in your terminal, clean log lines in cron jobs
 - **Download history** — tracks what's been downloaded so re-runs only fetch new books
 - **Graceful failure isolation** — one failed book doesn't stop the rest
+- **Parallel downloads** — `ThreadPoolExecutor` downloads multiple books simultaneously; configurable via `--workers N` (default 3)
 
 ## Quick Start
 
@@ -40,7 +41,9 @@ librofm:
 EOF
 
 # 3. Run
-librofm-downloader
+librofm-downloader            # default: 3 parallel workers
+librofm-downloader -w 5      # 5 parallel workers
+librofm-downloader --workers 1  # sequential (1 worker)
 ```
 
 ## Documentation

@@ -17,6 +17,7 @@ librofm-downloader [OPTIONS]
 | `--history` | | `download_history.json` | Path to download history JSON file |
 | `-v, --verbose` | | off | Print extra detail (URLs, paths, API responses) |
 | `--limit` N | | `0` (no limit) | Maximum number of books to download |
+| `-w, --workers` N | | `3` | Number of parallel download workers (1 = sequential) |
 
 ### --verbose
 
@@ -58,6 +59,32 @@ librofm-downloader --limit 3 -v
 ```
 
 Books are processed in the order returned by the Libro.fm API. Already-downloaded books are filtered out **before** the limit is applied.
+
+### --workers
+
+Controls how many books download simultaneously:
+
+```bash
+# Default: 3 parallel downloads
+librofm-downloader
+
+# High-bandwidth connection: 5 workers
+librofm-downloader -w 5
+
+# Force sequential (useful for debugging)
+librofm-downloader --workers 1
+```
+
+Resolution order (CLI > config > default):
+
+1. **`--workers N`** / **`-w N`** on the command line
+2. **`workers:`** field in `config.yaml`
+3. **Default: 3**
+
+> [!NOTE]
+> The worker count controls **CDN download parallelism**. Libro.fm API calls are separately capped at 3 concurrent requests via an internal semaphore, regardless of worker count. This protects the API server while letting CDN transfers scale up.
+
+Set to `1` for behavior identical to the pre-parallelism sequential mode.
 
 ## Exit codes
 

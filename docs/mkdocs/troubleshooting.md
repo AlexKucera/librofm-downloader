@@ -202,7 +202,7 @@ chmod u+w ./audiobooks/
 2. Whether a VPN/proxy is adding latency
 3. Libro.fm CDN responsiveness (varies by region)
 
-The tool downloads in a **single stream per book** (no parallelism within one book), but processes books sequentially. There is no built-in rate limiting or parallel download feature.
+The tool downloads in a **single stream per book** (no parallelism within one book), but can process **multiple books in parallel** via `--workers N` (default 3). Libro.fm API calls are rate-limited to 3 concurrent requests regardless of worker count.
 
 ### Large library takes a long time
 

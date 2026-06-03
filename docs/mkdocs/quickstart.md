@@ -83,7 +83,7 @@ This:
 2. Authenticates with Libro.fm via OAuth2 password grant
 3. Fetches your full library (all pages)
 4. Skips books already in `download_history.json`
-5. Downloads each new book with a progress bar
+5. Downloads each new book (3 parallel workers by default) with a progress bar
 6. Records successful downloads to history
 
 ### First run output (TTY)
