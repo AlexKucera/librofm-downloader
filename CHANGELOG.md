@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
-- **docs site (closes #10):** MkDocs documentation with 8 pages — Quickstart,
-  Configuration Reference, Secrets, Path Patterns, Format Strategies, CLI Usage,
-  and Troubleshooting. Material theme, flat URLs, all code snippets verified
-  against implementation. Polished README with badges, features table, format
-  comparison, and project comparison note.
+### Fixed
+
+- **history:** Make `DownloadHistory.write()` thread-safe with
+  `threading.Lock` so concurrent worker threads don't corrupt or lose
+  history entries during parallel downloads. Lock guards both in-memory
+  mutation and disk flush. 5 new tests (184 total) (closes #13)
 
 ### Added
 
@@ -23,14 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backward-compat fallback to most-recent task. `complete()`/`fail()`
   clean up both mappings. PlainTextReporter unchanged (already stateless).
   10 new tests (194 total) (closes #14)
-### Fixed
 
-- **history:** Make `DownloadHistory.write()` thread-safe with
-  `threading.Lock` so concurrent worker threads don't corrupt or lose
-  history entries during parallel downloads. Lock guards both in-memory
-  mutation and disk flush. 5 new tests (184 total) (closes #13)
-
-### Added
 - **config:** Parallel download worker count: `workers` field on Config dataclass
   (default 3), `InvalidWorkersError` validation for values < 1, YAML parsing
   from `librofm.workers`, and `-w`/`--workers` CLI flag with three-layer
@@ -39,6 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MP3 format fallback: download manifest fetch, ZIP part download+extraction
   with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
   mp3_only, m4b_only), and `--limit` CLI flag for capped downloads
+
+
+## [1.0.0]] - 2026-06-03
+
+### Documentation
+- **docs site (closes #10):** MkDocs documentation with 8 pages — Quickstart,
+  Configuration Reference, Secrets, Path Patterns, Format Strategies, CLI Usage,
+  and Troubleshooting. Material theme, flat URLs, all code snippets verified
+  against implementation. Polished README with badges, features table, format
+  comparison, and project comparison note.
+
+### Added
+
 - MP3 format fallback: download manifest fetch, ZIP part download+extraction
   with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
   mp3_only, m4b_only), and `--limit` CLI flag for capped downloads
