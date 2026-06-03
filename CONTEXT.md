@@ -76,7 +76,14 @@ via HTTP Range header on next run. Renamed to final filename on completion.
 
 ### **Sync Run**
 One execution of the script: auth → fetch library → filter undownloaded
-→ download each → write history → print summary → exit.
+→ download each (sequentially or in parallel) → write history → print summary → exit.
+
+### **Workers**
+Number of simultaneous book downloads during a Sync Run. Configured via `workers` in
+config.yaml, `--workers N` CLI flag (CLI overrides config), or defaults to 3.
+Set to 1 for sequential behavior (identical to pre-parallelism). Libro.fm API calls
+are capped at 3 concurrent via semaphore regardless of worker count; CDN downloads
+are unbounded.
 
 ## API Surface (Libro.fm)
 
