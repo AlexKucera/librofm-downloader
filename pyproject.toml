@@ -21,6 +21,9 @@ dev = [
     "pytest-mock>=3.12",
 ]
 
+[project.scripts]
+librofm-downloader = "librofm_downloader.cli:run"
+
 [tool.setuptools.packages.find]
 include = ["librofm_downloader*"]
 
