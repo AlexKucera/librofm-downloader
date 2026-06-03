@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from rich.console import Console
+
 from librofm_downloader.downloader import Book
 
 
@@ -100,6 +102,9 @@ def download_all_books(
 
     Returns:
         OrchestratorResult with counts and per-book details, stable-sorted by original index.
+
+    Raises:
+        KeyboardInterrupt: Re-raised after draining in-flight downloads on Ctrl+C.
     """
     if not raw_books:
         return OrchestratorResult()
@@ -115,24 +120,39 @@ def download_all_books(
     failed_books: list[tuple[int, Book, str]] = []  # (original_index, book, reason)
     skipped_books: list[tuple[int, Book]] = []  # (original_index, book)
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {
             executor.submit(_download_one, book, download_fn, reporter): idx
             for idx, book in books_with_index
         }
 
-        for future in as_completed(futures):
-            original_idx = futures[future]
-            book, result, error, was_skipped = future.result()
+        try:
+            for future in as_completed(futures):
+                original_idx = futures[future]
+                book, result, error, was_skipped = future.result()
 
-            if error:
-                failed_count += 1
-                failed_books.append((original_idx, book, error))
-            elif was_skipped:
-                skipped_count += 1
-                skipped_books.append((original_idx, book))
-            else:
-                downloaded_count += 1
+                if error:
+                    failed_count += 1
+                    failed_books.append((original_idx, book, error))
+                elif was_skipped:
+                    skipped_count += 1
+                    skipped_books.append((original_idx, book))
+                else:
+                    downloaded_count += 1
+        except KeyboardInterrupt:
+            # (Console imported at module level)
+            Console().print("\n[yellow]Aborting...[/yellow] (draining in-flight downloads)")
+            try:
+                executor.shutdown(wait=True)
+            except KeyboardInterrupt:
+                Console().print("\n[red]Force quit — partial downloads may be incomplete.[/red]")
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise  # re-raise immediately for fast exit
+            raise  # re-raise single KeyboardInterrupt for cli.py to handle exit code 130
+    finally:
+        executor.shutdown(wait=False)  # safety: only effective if not already shut down
 
     # Stable sort by original index to preserve library order
     failed_books.sort(key=lambda x: x[0])

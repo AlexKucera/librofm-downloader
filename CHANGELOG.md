@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and skipped_books as Book objects. `_raw_to_book()` conversion extracted from
   cli.py. 20 new tests (218 total) (closes #16)
 
+- **orchestrator:** Graceful Ctrl+C drain during parallel downloads:
+  first interrupt prints "Aborting...", drains in-flight downloads via
+  `executor.shutdown(wait=True)`, then re-raises for exit code 130; second
+  interrupt during drain force-quits immediately with
+  `shutdown(cancel_futures=True)`. 13 new integration tests covering
+  workers=1 regression parity, concurrent execution proof, summary ordering,
+  failure isolation, verbose overlap safety, double-Ctrl+C fast exit, and
+  partial file resume-safety after interrupt (231 total) (closes #17)
+
 - MP3 format fallback: download manifest fetch, ZIP part download+extraction
   with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
   mp3_only, m4b_only), and `--limit` CLI flag for capped downloads

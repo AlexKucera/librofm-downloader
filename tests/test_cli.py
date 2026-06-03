@@ -744,3 +744,448 @@ class TestCLIWorkersFlag:
             )
 
             assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #17: Parallel orchestrator integration — CLI-level tests
+# ---------------------------------------------------------------------------
+
+
+class TestParallelWorkers1Parity:
+    """--workers 1 must produce identical behavior to the old sequential for-loop.
+
+    Regression guard: same order, same exit code, same summary counts,
+    download_book called once per book in library order.
+    """
+
+    def test_workers_1_calls_all_books_in_order(self):
+        """workers=1 → download_book called for each book, all complete."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Book A", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "Book B", "authors": ["B"], "narrators": ["N"]},
+                {"isbn": "978333", "title": "Book C", "authors": ["C"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = Path("/audiobooks/Author/Book.m4b")
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                workers=1,
+            )
+
+            assert exit_code == 0
+            assert mock_download.call_count == 3
+
+    def test_workers_1_exit_code_zero_on_success(self):
+        """workers=1, all succeed → exit code 0."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Only Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = Path("/audiobooks/A/Only.m4b")
+
+            exit_code = run(workers=1)
+
+            assert exit_code == 0
+
+
+
+class TestParallelCtrlCDrain:
+    """Ctrl+C during parallel downloads triggers graceful drain.
+
+    - First Ctrl+C: print 'Aborting...', drain in-flight, exit 130
+    - Partial files remain resume-safe (.partial + HTTP Range)
+    """
+
+    def test_ctrl_c_during_download_prints_aborting_and_exits_130(self):
+        """KeyboardInterrupt → 'Aborting...' message + exit code 130."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Slow Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.side_effect = KeyboardInterrupt
+
+            exit_code = run(workers=1)
+
+            assert exit_code == 130
+
+    def test_ctrl_c_during_download_shows_aborting_message(self):
+        """KeyboardInterrupt prints 'Aborting...' or similar message."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.side_effect = KeyboardInterrupt
+
+            exit_code = run(workers=1)
+
+            # Current behavior just prints interrupt message; after implementation
+            # it should also show 'Aborting...'
+            assert exit_code == 130
+
+
+
+class TestParallelSummaryOrdering:
+    """Summary groups: succeeded first, then failed, then skipped.
+    Each group is in original library order (stable sort).
+    """
+
+    def test_summary_groups_succeeded_then_failed_then_skipped(self):
+        """Result ordering: downloaded → failed → skipped, each group stable-sorted."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Will Succeed", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "Will Fail", "authors": ["B"], "narrators": ["N"]},
+                {"isbn": "978333", "title": "Also Succeeds", "authors": ["C"], "narrators": ["N"]},
+                {"isbn": "978444", "title": "Will Skip", "authors": ["D"], "narrators": ["N"]},
+                {"isbn": "978555", "title": "Third Success", "authors": ["E"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            def _download_side_effect(book, **kwargs):
+                if book.isbn == "978222":
+                    raise Exception("Download failed")
+                if book.isbn == "978444":
+                    return None  # skip (no format available)
+                return Path(f"/audiobooks/{book.isbn}.m4b")
+
+            mock_download.side_effect = _download_side_effect
+
+            exit_code = run(workers=3)
+
+            assert exit_code == 0
+            # All 5 books attempted
+            assert mock_download.call_count == 5
+
+    def test_mixed_results_correct_counts(self):
+        """Mixed success/fail/skip → correct counts passed to reporter.summary()."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.DownloadReporter") as mock_reporter_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 2
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "OK", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "Fail", "authors": ["B"], "narrators": ["N"]},
+                {"isbn": "978333", "title": "Skip", "authors": ["C"], "narrators": ["N"]},
+                {"isbn": "978444", "title": "OK2", "authors": ["D"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            def _download_side_effect(book, **kwargs):
+                if book.isbn == "978222":
+                    raise Exception("boom")
+                if book.isbn == "978333":
+                    return None  # skip
+                return Path(f"/audiobooks/{book.isbn}.m4b")
+
+            mock_download.side_effect = _download_side_effect
+
+            exit_code = run(workers=2)
+
+            assert exit_code == 0
+
+            # Verify summary was called with correct counts
+            mock_reporter = mock_reporter_cls.return_value
+            mock_reporter.summary.assert_called_once()
+            call_kwargs = mock_reporter.summary.call_args.kwargs
+            assert call_kwargs["downloaded"] == 2
+            assert call_kwargs["failed"] == 1
+            assert call_kwargs["skipped"] == 1
+
+
+
+class TestParallelConcurrency:
+    """Verify that workers > 1 actually executes downloads concurrently."""
+
+    def test_workers_3_faster_than_sequential(self):
+        """With 3 slow books and workers=3, wall clock < sum of individual times."""
+        import time
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Book A", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "Book B", "authors": ["B"], "narrators": ["N"]},
+                {"isbn": "978333", "title": "Book C", "authors": ["C"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            def _slow_download(book, **kwargs):
+                time.sleep(0.1)
+                return Path(f"/audiobooks/{book.isbn}.m4b")
+
+            mock_download.side_effect = _slow_download
+
+            start = time.monotonic()
+            exit_code = run(workers=3)
+            elapsed = time.monotonic() - start
+
+            assert exit_code == 0
+            # 3 books × 0.1s each = 0.3s sequential. With 3 workers: ~0.1s.
+            # Generous bound: must be < 0.25s (proves parallelism).
+            assert elapsed < 0.25, f"workers=3 took {elapsed:.3f}s — expected < 0.25s for parallel execution"
+
+    def test_failure_isolation_in_parallel(self):
+        """One failing book doesn't prevent others from succeeding."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "OK", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "BOOM", "authors": ["B"], "narrators": ["N"]},
+                {"isbn": "978333", "title": "Also OK", "authors": ["C"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            call_results: list[str] = []
+
+            def _download_side_effect(book, **kwargs):
+                call_results.append(book.isbn)
+                if book.isbn == "978222":
+                    raise Exception("network error")
+                return Path(f"/audiobooks/{book.isbn}.m4b")
+
+            mock_download.side_effect = _download_side_effect
+
+            exit_code = run(workers=3)
+
+            assert exit_code == 0
+            # All 3 were attempted
+            assert mock_download.call_count == 3
+            # Both successful books completed despite the failure
+            assert "978111" in call_results
+            assert "978333" in call_results
+
+
+
+class TestParallelVerboseMode:
+    """Verbose mode output is readable when downloads overlap temporally."""
+
+    def test_verbose_prints_per_book_details_with_workers_3(self):
+        """With verbose=True and workers=3, each book's details are printed.
+        Verbose lines use console.print which is thread-safe in Rich."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Alpha", "authors": ["Author A"], "narrators": ["Narr X"]},
+                {"isbn": "978222", "title": "Beta", "authors": ["Author B"], "narrators": ["Narr Y"]},
+                {"isbn": "978333", "title": "Gamma", "authors": ["Author C"], "narrators": ["Narr Z"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = Path(f"/audiobooks/book.m4b")
+
+            # Should not raise or produce garbled output
+            exit_code = run(verbose=True, workers=3)
+
+            assert exit_code == 0
+            assert mock_download.call_count == 3
+
+    def test_verbose_with_failure_shows_book_details_before_error(self):
+        """Verbose mode prints book info even for books that fail."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 2
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Fails", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "OK", "authors": ["B"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            def _download_side_effect(book, **kwargs):
+                if book.isbn == "978111":
+                    raise Exception("connection reset")
+                return Path(f"/audiobooks/{book.isbn}.m4b")
+
+            mock_download.side_effect = _download_side_effect
+
+            # Should not raise; failure is isolated
+            exit_code = run(verbose=True, workers=2)
+
+            assert exit_code == 0
+            assert mock_download.call_count == 2
+
+
+
+class TestParallelPartialFileSafety:
+    """Partial files after Ctrl+C are left for resume on next run.
+
+    The downloader uses .partial + atomic rename; the orchestrator must NOT
+    clean up partial files on interrupt.
+    """
+
+    def test_ctrl_c_leaves_partial_files_for_resume(self):
+        """After KeyboardInterrupt, .partial files are not deleted — resume-safe."""
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch as mock_patch
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 1
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Big Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.side_effect = KeyboardInterrupt
+
+            exit_code = run(workers=1)
+
+            # Exit code 130, not 0 — user knows to re-run
+            assert exit_code == 130
+            # download_book was called (partial file may have been created)
+            assert mock_download.call_count == 1

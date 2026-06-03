@@ -297,6 +297,8 @@ class TestConcurrency:
 
     def test_workers_three_runs_concurrently(self):
         """3 books with workers=3 → all overlap (total time < sequential)."""
+        import signal
+        import signal
         import threading
         import time
 
@@ -635,3 +637,97 @@ class TestEdgeCases:
         assert result.skipped_count == 3
         assert result.downloaded_count == 0
         assert result.failed_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #17: Graceful Ctrl+C drain — orchestrator-level tests
+# ---------------------------------------------------------------------------
+
+
+class TestCtrlCDrain:
+    """KeyboardInterrupt during parallel downloads triggers graceful drain.
+
+    - Catches KeyboardInterrupt inside the executor block
+    - Prints 'Aborting...'
+    - Drains in-flight downloads (shutdown(wait=True))
+    - Returns partial result or re-raises for CLI to handle exit code
+    """
+
+    def test_ctrl_c_returns_partial_result_with_completed_downloads(self):
+        """KeyboardInterrupt in one worker; others complete during drain."""
+        import time
+
+        completed_isbns: list[str] = []
+
+        def download_fn(book: Book) -> Path | None:
+            if book.isbn == "978111":
+                raise KeyboardInterrupt  # simulate Ctrl+C during this download
+            # Other books do brief work then complete normally
+            time.sleep(0.05)
+            completed_isbns.append(book.isbn)
+            return Path(f"/fake/{book.isbn}.m4b")
+
+        raw_books = [
+            _make_raw_book(isbn="978111", title="Interrupted Book"),
+            _make_raw_book(isbn="978222", title="Completes OK"),
+            _make_raw_book(isbn="978333", title="Also Completes"),
+        ]
+
+        with pytest.raises(KeyboardInterrupt):
+            download_all_books(
+                raw_books,
+                workers=3,
+                download_fn=download_fn,
+                reporter=FakeReporter(),
+            )
+
+        # Books 222 and 333 completed during the drain phase
+        assert set(completed_isbns) == {"978222", "978333"}
+
+    def test_double_ctrl_c_during_drain_exits_immediately(self):
+        """Second KeyboardInterrupt during drain exits immediately without waiting."""
+        import signal
+        import threading
+        import time
+
+        def slow_download_fn(book: Book) -> Path | None:
+            time.sleep(10)  # slow — drain should NOT wait for this
+            return Path(f"/fake/{book.isbn}.m4b")
+
+        raw_books = [
+            _make_raw_book(isbn="978111", title="Interrupted Book"),
+            _make_raw_book(isbn="978222", title="Slow Book"),
+        ]
+
+        def download_fn_with_first_interrupt(book: Book) -> Path | None:
+            if book.isbn == "978111":
+                raise KeyboardInterrupt  # first Ctrl+C
+            return slow_download_fn(book)
+
+        # Send second interrupt from another thread after a short delay
+        # (during the drain/shutdown(wait=True) phase)
+        def send_second_interrupt_after_delay():
+            time.sleep(0.2)  # give time for first interrupt to be caught and drain to start
+            # Send SIGINT to our own process to simulate second Ctrl+C
+            import os
+            os.kill(os.getpid(), signal.SIGINT)
+
+        original_handler = signal.getsignal(signal.SIGINT)
+        try:
+            start = time.monotonic()
+            t = threading.Thread(target=send_second_interrupt_after_delay, daemon=True)
+            t.start()
+
+            with pytest.raises(KeyboardInterrupt):
+                download_all_books(
+                    raw_books,
+                    workers=2,
+                    download_fn=download_fn_with_first_interrupt,
+                    reporter=FakeReporter(),
+                )
+
+            elapsed = time.monotonic() - start
+            # Should exit quickly (< 2s), NOT wait for the 10s sleep
+            assert elapsed < 3.0, f"Double-Ctrl+C took {elapsed:.1f}s — should exit immediately"
+        finally:
+            signal.signal(signal.SIGINT, original_handler)
