@@ -137,3 +137,5 @@ audiobooks/
 config.yaml
 
 .DS_Store
+
+.claude/skills/gitnexus/
