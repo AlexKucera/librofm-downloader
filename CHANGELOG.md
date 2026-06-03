@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- MP3 format fallback: download manifest fetch, ZIP part download+extraction
+  with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
+  mp3_only, m4b_only), and `--limit` CLI flag for capped downloads
 - M4B download pipeline: streaming chunked download with .partial files,
   atomic rename to .m4b, resume support via HTTP Range header
 - `fetch_m4b_url()` client method for M4B download URL lookup

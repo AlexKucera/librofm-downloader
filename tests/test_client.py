@@ -206,3 +206,76 @@ class TestFetchM4BUrl:
 
         with pytest.raises(M4BUnavailableError, match="M4B not available for ISBN 9780000000001"):
             client.fetch_m4b_url("9780000000001", transport=transport)
+
+
+# ---------------------------------------------------------------------------
+# MP3 download manifest — Issue #6
+# ---------------------------------------------------------------------------
+
+
+class TestFetchDownloadManifest:
+    """MP3 download manifest — GET /api/v10/download-manifest?isbn=."""
+
+    def test_returns_parts_and_tracks_when_available(self):
+        """Book with MP3 format → returns parts list and track metadata."""
+        client = LibroFmClient(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest" and request.url.params.get("isbn") == "9781234567890":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [
+                            {"url": "https://cdn.libro.fm/part1.zip", "name": "part01"},
+                            {"url": "https://cdn.libro.fm/part2.zip", "name": "part02"},
+                        ],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Chapter 1"},
+                            {"number": 2, "chapter_title": "Chapter 2"},
+                        ],
+                    },
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client.authenticate(transport=transport)
+        manifest = client.fetch_download_manifest("9781234567890", transport=transport)
+
+        assert len(manifest["parts"]) == 2
+        assert manifest["parts"][0]["url"] == "https://cdn.libro.fm/part1.zip"
+        assert manifest["parts"][1]["url"] == "https://cdn.libro.fm/part2.zip"
+        assert len(manifest["tracks"]) == 2
+        assert manifest["tracks"][0]["chapter_title"] == "Chapter 1"
+
+    def test_returns_empty_parts_when_no_mp3_available(self):
+        """Book without MP3 format → returns empty manifest (404 or empty)."""
+        client = LibroFmClient(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(404, json={"error": "not found"})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client.authenticate(transport=transport)
+
+        with pytest.raises(M4BUnavailableError):
+            client.fetch_download_manifest("9780000000001", transport=transport)
