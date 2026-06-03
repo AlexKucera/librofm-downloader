@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- **docs site (closes #10):** MkDocs documentation with 8 pages — Quickstart,
+  Configuration Reference, Secrets, Path Patterns, Format Strategies, CLI Usage,
+  and Troubleshooting. Material theme, flat URLs, all code snippets verified
+  against implementation. Polished README with badges, features table, format
+  comparison, and project comparison note.
+
 ### Added
 - MP3 format fallback: download manifest fetch, ZIP part download+extraction
   with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,

@@ -1,0 +1,58 @@
+site_name: librofm-downloader
+docs_dir: .
+site_dir: ../../docs/html
+use_directory_urls: false
+site_description: Download owned audiobooks from your Libro.fm account
+site_author: Alex Kucera
+repo_url: https://github.com/AlexKucera/librofm-downloader
+repo_name: AlexKucera/librofm-downloader
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quickstart: quickstart.md
+      - Configuration Reference: configuration.md
+      - Secrets: secrets.md
+  - Guides:
+      - Path Patterns: path-patterns.md
+      - Format Strategies: format-strategies.md
+      - CLI Usage: cli-usage.md
+  - Troubleshooting: troubleshooting.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span_0__
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+
+extra_css:
+  - stylesheets/extra.css

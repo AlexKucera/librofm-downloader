@@ -1,0 +1,4 @@
+/* Custom overrides for librofm-downloader docs */
+md-typeset table {
+  font-size: 0.9em;
+}
