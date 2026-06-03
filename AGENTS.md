@@ -8,6 +8,7 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
 |------|------|------|---------|
+| 2026-06-03 | issue | [20260603-multi-bar-progress-per-book-identity-mapping-issue14_log.md](docs/devlog/20260603-multi-bar-progress-per-book-identity-mapping-issue14_log.md) | **Issue #14 Complete:** Per-book identity mapping for concurrent progress bars. `_tasks`/`_book_ids` dicts, `start_download()` returns `task_id`, `update(task_id=)` targeting. **10 new tests, 194 total** · **7/7 AC** |
 | 2026-06-03 | issue | [20260603-thread-safe-downloadhistory-write-issue13_log.md](docs/devlog/20260603-thread-safe-downloadhistory-write-issue13_log.md) | **Issue #13 Complete:** Thread-safe `DownloadHistory.write()` with `threading.Lock`. **5 new tests, 184 total** · **4/4 AC** |
 | 2026-06-03 | issue | [20260603-slice-1-workers-config-and-cli-flag-issue12_log.md](docs/devlog/20260603-slice-1-workers-config-and-cli-flag-issue12_log.md) | **Issue #12 Complete:** `workers` config field + `-w`/`--workers` CLI flag with 3-layer resolution (CLI > config > 3). `InvalidWorkersError` validation. **6 new tests, 179 total** · **7/7 AC** |
 | 2026-06-03 | issue | [20260603-issue10-documentation-site-and-readme_log.md](docs/devlog/20260603-issue10-documentation-site-and-readme_log.md) | **Issue #10 Complete:** MkDocs site (8 pages) + polished README. Material theme, flat URLs. **11/11 AC** · **172 tests pass** |

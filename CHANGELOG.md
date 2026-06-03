@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against implementation. Polished README with badges, features table, format
   comparison, and project comparison note.
 
+### Added
+
+- **progress:** Per-book identity mapping for concurrent progress bars:
+  replace singleton `_current_task`/`_current_book` with bidirectional
+  `_tasks`/`_book_ids` dicts keyed by `id(book)`. `start_download()` now
+  returns `task_id`, `update()` accepts optional `task_id` kwarg with
+  backward-compat fallback to most-recent task. `complete()`/`fail()`
+  clean up both mappings. PlainTextReporter unchanged (already stateless).
+  10 new tests (194 total) (closes #14)
 ### Fixed
 
 - **history:** Make `DownloadHistory.write()` thread-safe with

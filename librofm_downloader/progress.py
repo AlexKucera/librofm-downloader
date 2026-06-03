@@ -85,9 +85,16 @@ class ProgressReporter:
 
         self._console = Console(file=stdout or sys.stdout)
         self._progress = None  # Lazy init on first download
+        # Per-book identity mapping for concurrent downloads
+        self._tasks: dict[int, object] = {}  # task_id -> book
+        self._book_ids: dict[int, int] = {}  # id(book) -> task_id
 
-    def start_download(self, book, total_bytes: int = 0) -> None:
-        """Start a progress bar for this book's download."""
+    def start_download(self, book, total_bytes: int = 0) -> int:
+        """Start a progress bar for this book's download.
+
+        Returns:
+            The Rich task ID for this book's progress bar.
+        """
         from rich.progress import (
             BarColumn,
             DownloadColumn,
@@ -112,38 +119,53 @@ class ProgressReporter:
         description = f"{authors} - {book.title}"
         task_id = self._progress.add_task(description, total=total_bytes or None)
 
-        # Store task_id on self for update() to find it
-        # In practice we'd track per-book; for now store as current
-        self._current_task = task_id
-        self._current_book = book
-        self._start_time = time.monotonic()
+        # Store bidirectional mapping for per-book lookup
+        self._tasks[task_id] = book
+        self._book_ids[id(book)] = task_id
 
-    def update(self, completed: int, *, total: int | None = None) -> None:
+        return task_id
+
+    def update(self, completed: int, *, total: int | None = None, task_id: int | None = None) -> None:
         """Update progress bar with bytes completed.
 
         If *total* is provided (e.g. from a Content-Length header), also
         updates the task's total so that percentage and ETA can be computed.
+
+        Args:
+            completed: Bytes downloaded so far.
+            total: Optional total bytes (from Content-Length).
+            task_id: Specific task to update. Falls back to most recent if omitted.
         """
-        if self._progress and hasattr(self, "_current_task"):
-            kwargs: dict = {"completed": completed}
-            if total is not None:
-                kwargs["total"] = total
-            self._progress.update(self._current_task, **kwargs)
+        if not self._progress:
+            return
+        if task_id is None:
+            # Backward compat: use the most recently started task
+            task_id = next(reversed(self._tasks), None)
+        if task_id is None or task_id not in self._tasks:
+            return
+        kwargs: dict = {"completed": completed}
+        if total is not None:
+            kwargs["total"] = total
+        self._progress.update(task_id, **kwargs)
 
     def complete(self, book) -> None:
-        """Mark current progress bar as complete."""
-        if self._progress and hasattr(self, "_current_task"):
-            self._progress.update(self._current_task, completed=self._progress.tasks[self._current_task].total or 0)
-            self._console.print(f"  [green]✓[/green] {book.title}")
-            self._current_task = None
+        """Mark this book's progress bar as complete and remove it."""
+        task_id = self._book_ids.pop(id(book), None)
+        if task_id is None or not self._progress:
+            return
+        self._tasks.pop(task_id, None)
+        self._progress.update(task_id, completed=self._progress.tasks[task_id].total or 0)
+        self._console.print(f"  [green]✓[/green] {book.title}")
 
     def fail(self, book, reason: str = "") -> None:
-        """Mark current progress bar as failed."""
-        if self._progress and hasattr(self, "_current_task"):
-            self._progress.stop_task(self._current_task)
-            detail = f" ({reason})" if reason else ""
-            self._console.print(f"  [red]✗[/red] {book.title}[dim] [{book.isbn}]{detail}[/dim]")
-            self._current_task = None
+        """Mark this book's progress bar as failed and remove it."""
+        task_id = self._book_ids.pop(id(book), None)
+        if task_id is None or not self._progress:
+            return
+        self._tasks.pop(task_id, None)
+        self._progress.stop_task(task_id)
+        detail = f" ({reason})" if reason else ""
+        self._console.print(f"  [red]✗[/red] {book.title}[dim] [{book.isbn}]{detail}[/dim]")
 
     def summary(
         self,
