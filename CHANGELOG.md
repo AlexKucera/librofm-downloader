@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graceful shutdown, and integration scenarios (168 total)
 
 ### Fixed
+- **downloader:** Path doubling: `resolve_path()` returns Author/Title but code
+  appended title again, producing nested folders like Title/Title/Title.m4b.
+  Also fix cover download: add Libro.fm headers to httpx client, normalize
+  protocol-relative URLs (//cdn → https://cdn)
 - Library endpoint key mismatch: API returns "audiobooks" not "books"
 - M4B endpoint key mismatch: API returns "m4b_url" not "url"
 - Narrators nested under `audiobook_info.narrators` in API response

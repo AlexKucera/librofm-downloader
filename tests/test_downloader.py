@@ -386,7 +386,8 @@ class TestNeedsSubdirectory:
         )
         assert needs_subdirectory(book) is True
 
-    def test_true_when_cover_url_present(self):
+    def test_false_when_cover_url_only(self):
+        """cover_url alone does NOT trigger subdirectory — config-gated."""
         book = Book(
             title="Some Book",
             authors=["Author"],
@@ -395,7 +396,7 @@ class TestNeedsSubdirectory:
             pdf_extras=False,
             cover_url="https://example.com/cover.jpg",
         )
-        assert needs_subdirectory(book) is True
+        assert needs_subdirectory(book) is False
 
     def test_true_when_both_present(self):
         book = Book(
@@ -1368,18 +1369,33 @@ class TestDownloadAccompanyingFiles:
 class TestOutputStructure:
     """Integration tests for output directory structure with/without extras."""
 
-    def test_book_with_extras_creates_subdirectory(self):
-        """Book with cover_url → needs_subdirectory=True, output is a folder."""
+    def test_book_with_pdf_extras_creates_subdirectory(self):
+        """Book with pdf_extras → needs_subdirectory=True."""
         book = Book(
             title="Book With Extras",
             authors=["Author Name"],
             narrators=["Narrator"],
             isbn="9785555555555",
+            pdf_extras=True,
+            cover_url="",
+        )
+
+        # Only pdf_extras triggers subdirectory (not cover_url)
+        assert needs_subdirectory(book) is True
+
+    def test_book_with_only_cover_does_not_create_subdirectory(self):
+        """Book with only cover_url → needs_subdirectory=False (config-gated)."""
+        book = Book(
+            title="Book With Cover Only",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9785555555556",
+            pdf_extras=False,
             cover_url="https://cdn.example.com/cover.jpg",
         )
 
-        # Book with accompanying files should need subdirectory
-        assert needs_subdirectory(book) is True
+        # cover_url alone doesn't trigger — needs config.download_covers too
+        assert needs_subdirectory(book) is False
 
     def test_book_without_extras_is_flat(self):
         """Book without cover or PDF → needs_subdirectory=False, output is leaf file."""
@@ -1393,14 +1409,15 @@ class TestOutputStructure:
         # Book without accompanying files should be flat
         assert needs_subdirectory(book) is False
 
-    def test_resolve_output_dir_creates_subdir_for_extras(self):
-        """_resolve_output_dir creates subdirectory when book has extras."""
+    def test_resolve_output_dir_creates_subdir_for_pdf_extras(self):
+        """_resolve_output_dir creates subdirectory when book has pdf_extras."""
         book = Book(
             title="Subdir Book",
             authors=["Author Name"],
             narrators=["Narrator"],
             isbn="9787777777777",
-            cover_url="https://cdn.example.com/cover.jpg",
+            pdf_extras=True,
+            cover_url="",
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1414,6 +1431,75 @@ class TestOutputStructure:
             # Creating it should work
             output_dir.mkdir(parents=True, exist_ok=True)
             assert output_dir.is_dir()
+
+    def test_resolve_output_dir_flat_for_cover_only_without_config(self):
+        """cover_url without config → flat path (no subdirectory)."""
+        book = Book(
+            title="Cover Only Flat",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9787777777778",
+            pdf_extras=False,
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "audiobooks"
+            output_dir = _resolve_output_dir(book, base)
+
+            # cover_url doesn't create subdirectory (covers sit alongside .m4b)
+            assert output_dir == base / "Author Name"
+
+    def test_resolve_output_dir_flat_for_cover_regardless_of_config(self):
+        """cover_url never creates subdirectory — cover sits alongside .m4b.
+
+        Even with download_covers=True in config, the cover is a single file that
+        lives next to the audiobook file. No folder needed.
+        """
+        book = Book(
+            title="Cover Flat Book",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9787777777779",
+            pdf_extras=False,
+            cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "audiobooks"
+            output_dir = _resolve_output_dir(book, base)
+
+            # Cover URL alone → flat path, no subdirectory
+            assert output_dir == base / "Author Name"
+
+    def test_resolve_output_dir_subdir_no_title_doubling(self):
+        """When pdf_extras creates a subdir, title is NOT doubled.
+
+        resolve_path() returns 'Author/Title'. The subdir should be exactly that,
+        not 'Author/Title/Title'.
+        """
+        book = Book(
+            title="Subdir No Double",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9787777777780",
+            pdf_extras=True,
+            cover_url="",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "audiobooks"
+            output_dir = _resolve_output_dir(book, base)
+
+            # Should be base/Author/Subdir No Double — title appears once
+            expected = base / "Author Name" / "Subdir No Double"
+            assert output_dir == expected, f"Expected {expected}, got {output_dir}"
+
+            # Verify no doubled title component
+            parts = output_dir.parts
+            # Count how many times the sanitized title appears
+            title_parts = [p for p in parts if p == "Subdir No Double"]
+            assert len(title_parts) == 1, f"Title doubled in path: {output_dir}"
 
     def test_resolve_output_dir_flat_for_no_extras(self):
         """_resolve_output_dir returns flat path when no extras (audio is leaf file)."""

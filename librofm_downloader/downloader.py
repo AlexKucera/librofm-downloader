@@ -153,9 +153,12 @@ def _resolve_custom_pattern(book: Book, pattern: str) -> str:
 def needs_subdirectory(book: Book) -> bool:
     """Check whether a book needs a subdirectory for accompanying files.
 
-    Returns True when PDF extras or cover art are present.
+    Returns True when PDF extras are present.
+    Cover art does NOT trigger a subdirectory here — cover downloads are
+    config-gated (``config.download_covers``) and considered separately
+    in ``_resolve_output_dir``.
     """
-    return bool(book.pdf_extras) or bool(book.cover_url)
+    return bool(book.pdf_extras)
 
 
 # ---------------------------------------------------------------------------
@@ -323,19 +326,30 @@ def download_m4b(
     return output_path
 
 
-def _resolve_output_dir(book: Book, output_base: Path | str) -> Path:
+def _resolve_output_dir(
+    book: Book,
+    output_base: Path | str,
+    config: "Config | None" = None,
+) -> Path:
     """Resolve the output directory for a book (parent of the actual file).
 
-    For books with accompanying files → subdirectory: base/Author/Series/Book Title/
+    For books with accompanying files → subdirectory: base/Author/Title/
     For standalone books → parent dir only: base/Author/  (file is leaf: Title.m4b)
+
+    Subdirectory is needed when:
+    - PDF extras exist (multi-file output), OR
+    - Cover art will be downloaded (``config.download_covers`` + ``book.cover_url``)
     """
     base = Path(output_base)
     first_author = sanitize(book.authors[0] if book.authors else 'Unknown')
 
-    if needs_subdirectory(book):
-        relative = resolve_path(book)
-        title_sanitized = sanitize(book.title)
-        return base / relative / title_sanitized
+    needs_subdir = needs_subdirectory(book)  # pdf_extras
+    if not needs_subdir and config is not None:
+        needs_subdir = bool(config.download_covers and book.cover_url)
+
+    if needs_subdir:
+        relative = resolve_path(book)  # e.g. "Author/Title" — already includes title
+        return base / relative
 
     # Flat: file is leaf node under author dir
     return base / first_author
@@ -367,7 +381,7 @@ def download_book(
     """
     from datetime import datetime, timezone
 
-    output_dir = _resolve_output_dir(book, output_base)
+    output_dir = _resolve_output_dir(book, output_base, config=config)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---
@@ -472,16 +486,30 @@ def _download_cover(
 ) -> Path | None:
     """Download a cover art file via streaming .partial → atomic rename.
 
+    Sends the same User-Agent/AppVer headers as the main client so the
+    Libro.fm CDN accepts the request.
+
     Returns Path on success, None on failure (logs warning).
     """
+    from librofm_downloader.client import LibroFmClient
+
     filename = _cover_filename_from_url(url)
+
+    # Normalize protocol-relative URLs (//covers.libro.fm/... → https://covers.libro.fm/...)
+    if url.startswith("//"):
+        url = "https:" + url
+
     output_path = output_dir / filename
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        client = httpx.Client(transport=transport, follow_redirects=True)
+        client = httpx.Client(
+            transport=transport,
+            follow_redirects=True,
+            headers=LibroFmClient.DEFAULT_HEADERS,
+        )
         with client.stream("GET", url) as resp:
             resp.raise_for_status()
             with open(partial_path, "wb") as f:
