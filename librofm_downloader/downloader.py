@@ -3,8 +3,17 @@
 Pure logic module — no I/O, no network. All deterministic string manipulation.
 """
 
+import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+
+from librofm_downloader.client import M4BUnavailableError
+from librofm_downloader.history import HistoryEntry
+
+logger = logging.getLogger(__name__)
 
 # Characters that are unsafe in filesystem path components
 _ILLEGAL_CHARS = str.maketrans("", "", "<>/\\|?*")
@@ -147,3 +156,117 @@ def needs_subdirectory(book: Book) -> bool:
     Returns True when PDF extras or cover art are present.
     """
     return bool(book.pdf_extras) or bool(book.cover_url)
+
+
+# ---------------------------------------------------------------------------
+# M4B streaming download
+# ---------------------------------------------------------------------------
+
+# Constants for M4B download
+
+CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
+
+
+def download_m4b(
+    url: str,
+    output_path: Path | str,
+    transport: httpx.BaseTransport | None = None,
+) -> Path:
+    """Download an M4B file via streaming chunks.
+
+    Writes to ``{output_path}.partial`` during transfer, then atomically
+    renames to the final ``{output_path}`` on completion.
+
+    Args:
+        url: The CDN URL for the M4B file.
+        output_path: Destination path (will have .m4b extension).
+        transport: Optional httpx transport override for testing.
+
+    Returns:
+        The Path of the completed .m4b file.
+    """
+    output_path = Path(output_path)
+    partial_path = output_path.with_suffix(output_path.suffix + ".partial")
+
+    # Ensure parent directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Resume support: detect existing partial file
+    resume_from = 0
+    if partial_path.exists():
+        resume_from = partial_path.stat().st_size
+        logger.info("Resuming download from byte %d", resume_from)
+
+    headers: dict[str, str] = {}
+    if resume_from > 0:
+        headers["Range"] = f"bytes={resume_from}-"
+
+    client = httpx.Client(transport=transport, follow_redirects=True)
+
+    mode = "ab" if resume_from > 0 else "wb"
+
+    with client.stream("GET", url, headers=headers) as resp:
+        resp.raise_for_status()
+
+        with open(partial_path, mode) as f:
+            for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                f.write(chunk)
+
+    # Atomic rename from .partial to final filename
+    partial_path.rename(output_path)
+
+    logger.info("Downloaded %s → %s", url, output_path)
+    return output_path
+
+
+def download_book(
+    book: Book,
+    client: "LibroFmClient",
+    output_base: Path | str,
+    history: "DownloadHistory",
+    transport: httpx.BaseTransport | None = None,
+) -> Path | None:
+    """Orchestrate a single book download: resolve path → query M4B → download → history.
+
+    Args:
+        book: The book metadata.
+        client: Authenticated LibroFmClient instance.
+        output_base: Base directory for downloads.
+        history: DownloadHistory instance to record successful downloads.
+        transport: Optional httpx transport override for testing.
+
+    Returns:
+        Path to the downloaded file, or None if M4B is unavailable (book skipped).
+    """
+    from datetime import datetime, timezone
+
+    # 1. Resolve output path using Slice 3a logic
+    relative = resolve_path(book)
+    title_sanitized = sanitize(book.title)
+
+    if needs_subdirectory(book):
+        output_path = Path(output_base) / relative / f"{title_sanitized}.m4b"
+    else:
+        output_path = Path(output_base) / f"{relative}.m4b"
+
+    # 2. Query M4B availability
+    try:
+        m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
+    except M4BUnavailableError:
+        logger.info("Skipping %s (%s): no M4B available", book.title, book.isbn)
+        return None
+
+    # 3. Download
+    result = download_m4b(m4b_url, output_path, transport=transport)
+
+    # 4. Write history entry (only after successful complete download)
+    entry = HistoryEntry(
+        isbn=book.isbn,
+        title=book.title,
+        format="m4b",
+        path=str(result),
+        downloaded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    history.write(entry)
+
+    return result

@@ -7,6 +7,10 @@ class AuthError(Exception):
     """Authentication failed (bad credentials, network error, etc.)."""
 
 
+class M4BUnavailableError(Exception):
+    """M4B format is not available for this book (404 from API)."""
+
+
 class LibroFmClient:
     """Libro.fm API client with OAuth2 password grant and library fetching."""
 
@@ -93,7 +97,43 @@ class LibroFmClient:
             resp = client.get(next_url)
             resp.raise_for_status()
             data = resp.json()
-            all_books.extend(data.get("books", []))
+            all_books.extend(data.get("audiobooks", []))
             next_url = data.get("next_page") or None
 
         return all_books
+
+
+    def fetch_m4b_url(self, isbn: str, transport: httpx.BaseTransport | None = None) -> str:
+        """Fetch the M4B download URL for a given ISBN.
+
+        Args:
+            isbn: The ISBN of the audiobook.
+            transport: Optional httpx transport override for testing.
+
+        Returns:
+            The CDN URL string for the M4B file.
+
+        Raises:
+            AuthError: If not authenticated.
+            M4BUnavailableError: If the book has no M4B format available (404).
+        """
+        if not self._access_token:
+            raise AuthError("Not authenticated. Call authenticate() first.")
+
+        headers = {**self.DEFAULT_HEADERS, "Authorization": f"Bearer {self._access_token}"}
+
+        client = httpx.Client(
+            base_url=self._base_url,
+            headers=headers,
+            timeout=self._timeout,
+            transport=transport,
+        )
+
+        resp = client.get(f"/api/v10/audiobooks/{isbn}/packaged_m4b")
+
+        if resp.status_code == 404:
+            raise M4BUnavailableError(f"M4B not available for ISBN {isbn}")
+
+        resp.raise_for_status()
+        data = resp.json()
+        return data["m4b_url"]

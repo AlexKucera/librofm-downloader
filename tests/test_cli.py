@@ -106,3 +106,103 @@ class TestCLIHistoryFiltering:
             assert "Old Book" not in captured.out
             assert "New Book A" in captured.out
             assert "New Book B" in captured.out
+
+
+
+class TestCLIDownloadOrchestration:
+    """CLI downloads books and reports results."""
+
+    def test_downloads_books_and_reports_summary(self, capsys):
+        """Each undownloaded book: resolve → query M4B → download → history.
+        Books without M4B are skipped (not errors)."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.Book") as mock_book_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+
+            # 3 new books
+            raw_books = [
+                {"isbn": "978111", "title": "M4B Book", "authors": ["A1"],
+                 "narrators": ["N1"]},
+                {"isbn": "978222", "title": "No M4B Book", "authors": ["A2"],
+                 "narrators": ["N2"]},
+                {"isbn": "978333", "title": "Another M4B", "authors": ["A3"],
+                 "narrators": ["N3"]},
+            ]
+            mock_instance.fetch_library.return_value = raw_books
+
+            # All are new (not in history)
+            mock_history_instance = mock_history_cls.return_value
+            mock_history_instance.is_downloaded.return_value = False
+
+            # download_book returns Path for success, None for skip
+            from pathlib import Path
+            mock_download.side_effect = [
+                Path("/audiobooks/A1/M4B Book.m4b"),  # success
+                None,  # no M4B available (skipped)
+                Path("/audiobooks/A3/Another M4B.m4b"),  # success
+            ]
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            assert exit_code == 0
+            captured = capsys.readouterr()
+            # Summary should show downloads + skips
+            assert "downloaded" in captured.out.lower() or "978111" in captured.out or "M4B Book" in captured.out
+
+
+
+class TestCLIVerbose:
+    """Verbose flag prints extra detail at each pipeline stage."""
+
+    def test_verbose_prints_config_and_auth_details(self, capsys):
+        """--verbose shows config values and auth status."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.Book") as mock_book_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Verbose Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = None  # skipped (no M4B)
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                verbose=True,
+            )
+
+            assert exit_code == 0
+            captured = capsys.readouterr()
+            # Verbose sections should appear
+            assert "config" in captured.out.lower()
+            assert "auth" in captured.out.lower()
+            assert "alice" in captured.out
+            assert "m4b_mp3_fallback" in captured.out
+            assert "1 book(s) in library" in captured.out or "library" in captured.out.lower()

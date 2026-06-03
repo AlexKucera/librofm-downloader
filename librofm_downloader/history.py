@@ -41,14 +41,14 @@ class DownloadHistory:
 
     def find(self, isbn: str) -> HistoryEntry | None:
         """Look up a history entry by ISBN. Returns None if not found."""
-        entry_dict = self._data.get(isbn)
+        entry_dict = self._data.get(str(isbn))
         if entry_dict is None:
             return None
         return HistoryEntry(**entry_dict)
 
     def is_downloaded(self, isbn: str) -> bool:
         """Check whether an ISBN was previously downloaded."""
-        return isbn in self._data
+        return str(isbn) in self._data
 
     def write(self, entry: HistoryEntry) -> None:
         """Persist a history entry to disk."""

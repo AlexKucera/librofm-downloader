@@ -1,8 +1,20 @@
 """Tests for librofm_downloader.downloader — TDD vertical slices."""
 
+import httpx
 import pytest
+from pathlib import Path
+import tempfile
 
-from librofm_downloader.downloader import Book, needs_subdirectory, resolve_path, sanitize
+from librofm_downloader.downloader import (
+    Book,
+    needs_subdirectory,
+    resolve_path,
+    sanitize,
+    download_m4b,
+    download_book,
+)
+from librofm_downloader.client import LibroFmClient
+from librofm_downloader.history import DownloadHistory
 
 
 class TestSanitizeIllegalChars:
@@ -412,3 +424,358 @@ class TestNeedsSubdirectory:
             isbn="9780000000001",
         )
         assert needs_subdirectory(book) is False
+
+
+# ---------------------------------------------------------------------------
+# M4B streaming download
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadM4B:
+    """Streaming chunked download with .partial → atomic rename to .m4b."""
+
+    def test_downloads_and_renames_to_m4b(self):
+        """Successful download writes .partial then renames to final .m4b file."""
+        import io
+
+        # 24 bytes of fake M4B data (3 chunks of 8 bytes each)
+        payload = b"fake-m4b-audio-data-!!" * 3  # 72 bytes
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "output.m4b"
+            result = download_m4b(
+                url="https://cdn.example.com/book.m4b",
+                output_path=output_path,
+                transport=transport,
+            )
+
+            # Final .m4b file exists with correct content
+            assert output_path.exists()
+            assert output_path.read_bytes() == payload
+            # No .partial file left behind
+            assert not Path(str(output_path) + ".partial").exists()
+            # Result is the final path
+            assert result == output_path
+
+    def test_resumes_from_partial_file(self):
+        """Existing .partial file → sends Range header, appends from offset."""
+        # First "download" writes 30 bytes
+        first_chunk = b"A" * 30
+        # Server has 72 bytes total; client needs last 42
+        remaining = b"B" * 42
+        full_payload = first_chunk + remaining
+        range_header_seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            range_header_seen.append(request.headers.get("range", ""))
+            # Only accept requests with correct Range header for resume
+            rh = request.headers.get("range")
+            if rh == "bytes=30-":
+                return httpx.Response(
+                    206,
+                    content=remaining,
+                    headers={
+                        "content-range": f"bytes 30-{len(full_payload)-1}/{len(full_payload)}",
+                        "content-length": str(len(remaining)),
+                    },
+                )
+            # Reject any request without proper Range header
+            return httpx.Response(400, text="Expected Range header")
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "resume_test.m4b"
+            partial_path = Path(str(output_path) + ".partial")
+
+            # Pre-create partial file simulating interrupted download
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            partial_path.write_bytes(first_chunk)
+
+            result = download_m4b(
+                url="https://cdn.example.com/book.m4b",
+                output_path=output_path,
+                transport=transport,
+            )
+
+            # Verify Range header was sent with correct offset
+            assert "bytes=30-" in range_header_seen
+            # Final file has complete content
+            assert output_path.exists()
+            assert output_path.read_bytes() == full_payload
+            # No .partial left behind
+            assert not partial_path.exists()
+
+    def test_output_path_uses_resolved_sanitized_path(self):
+        """Download goes to the resolved+sanitized path for the book's metadata."""
+        payload = b"m4b-data-here"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload)
+
+        transport = httpx.MockTransport(handler)
+
+        book = Book(
+            title="Test: A Story",
+            authors=["O'Brien, Jane"],
+            narrators=["Narrator One"],
+            isbn="9789876543210",
+            series="Cool Series",
+            series_num=3,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            # Resolve path using Slice 3a logic
+            relative = resolve_path(book)
+            # Apply subdirectory decision
+            if needs_subdirectory(book):
+                output_path = base_dir / relative / f"{sanitize(book.title)}.m4b"
+            else:
+                output_path = base_dir / f"{relative}.m4b"
+
+            result = download_m4b(
+                url="https://cdn.example.com/book.m4b",
+                output_path=output_path,
+                transport=transport,
+            )
+
+            assert result.exists()
+            assert result.read_bytes() == payload
+            # Path should be sanitized (colon replaced, apostrophe preserved)
+            assert "O'Brien" in str(result)  # apostrophe preserved
+            assert ":" not in str(result.parent)  # colon removed from parent dirs
+
+
+    def test_creates_subdirectory_when_extras_present(self):
+        """Book with PDF extras → file inside subdirectory, not flat."""
+        payload = b"m4b-with-extras"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload)
+
+        transport = httpx.MockTransport(handler)
+
+        book = Book(
+            title="Book With Extras",
+            authors=["Author Name"],
+            narrators=["Narrator"],
+            isbn="9785555555555",
+            pdf_extras=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            relative = resolve_path(book)
+            # needs_subdirectory is True → file goes inside subdirectory
+            output_path = base_dir / relative / f"{sanitize(book.title)}.m4b"
+
+            result = download_m4b(
+                url="https://cdn.example.com/book.m4b",
+                output_path=output_path,
+                transport=transport,
+            )
+
+            # File is inside subdirectory (not at leaf)
+            assert result.parent.name == sanitize(book.title)
+            assert result.exists()
+            assert result.read_bytes() == payload
+
+
+# ---------------------------------------------------------------------------
+# Orchestration: resolve path → query M4B → download → update history
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadBook:
+    """End-to-end orchestration with mocked HTTP."""
+
+    def test_writes_history_entry_after_successful_download(self):
+        """After successful M4B download, history entry is persisted."""
+        m4b_payload = b"complete-m4b-audio-data"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9781111111111/packaged_m4b":
+                return httpx.Response(
+                    200,
+                    json={"m4b_url": "https://cdn.example.com/book.m4b"},
+                )
+            # CDN download
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=m4b_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(
+            title="History Test Book",
+            authors=["Hist Author"],
+            narrators=["H Narr"],
+            isbn="9781111111111",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            result = download_book(
+                book=book,
+                client=client,
+                output_base=base_dir,
+                history=history,
+                transport=transport,
+            )
+
+            # History was written
+            assert history.is_downloaded("9781111111111")
+            entry = history.find("9781111111111")
+            assert entry is not None
+            assert entry.format == "m4b"
+            assert entry.title == "History Test Book"
+
+    def test_skips_book_without_m4b(self):
+        """Book with no M4B available → returns None, no history entry, no error."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9780000000000/packaged_m4b":
+                return httpx.Response(404)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(
+            title="No M4B Book",
+            authors=["Author"],
+            narrators=["Narr"],
+            isbn="9780000000000",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            result = download_book(
+                book=book,
+                client=client,
+                output_base=base_dir,
+                history=history,
+                transport=transport,
+            )
+
+            # Returns None (skipped)
+            assert result is None
+            # No history entry written
+            assert history.is_downloaded("9780000000000") is False
+
+    def test_no_history_entry_on_download_failure(self):
+        """If download fails after M4B query, no history entry is written."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9789999999999/packaged_m4b":
+                return httpx.Response(
+                    200,
+                    json={"m4b_url": "https://cdn.example.com/fail.m4b"},
+                )
+            # CDN returns 500 error
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(500, text="Server Error")
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(
+            title="Fail Book",
+            authors=["Author"],
+            narrators=["Narr"],
+            isbn="9789999999999",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            with pytest.raises(httpx.HTTPStatusError):
+                download_book(
+                    book=book,
+                    client=client,
+                    output_base=base_dir,
+                    history=history,
+                    transport=transport,
+                )
+
+            # No history entry written for failed download
+            assert history.is_downloaded("9789999999999") is False
+
+    def test_flat_path_when_no_accompanying_files(self):
+        """Book without extras/cover → flat path, no subdirectory created."""
+        payload = b"flat-m4b-data"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9782222222222/packaged_m4b":
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/flat.m4b"})
+            return httpx.Response(200, content=payload)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(
+            title="Standalone Book",
+            authors=["Solo Author"],
+            narrators=["Solo Narr"],
+            isbn="9782222222222",
+            # No pdf_extras, no cover_url → needs_subdirectory() returns False
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            result = download_book(
+                book=book,
+                client=client,
+                output_base=base_dir,
+                history=history,
+                transport=transport,
+            )
+
+            # File is at leaf (flat), not inside a subdirectory
+            assert result is not None
+            # Path should be base/Author/Title.m4b (flat) — title is filename stem
+            assert result.stem == "Standalone Book"
+            # No extra subdirectory between author and file
+            assert result.parent.name == "Solo Author"
+            assert result.exists()

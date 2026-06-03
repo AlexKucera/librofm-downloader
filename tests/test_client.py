@@ -6,7 +6,7 @@ import logging
 import httpx
 import pytest
 
-from librofm_downloader.client import LibroFmClient, AuthError
+from librofm_downloader.client import LibroFmClient, AuthError, M4BUnavailableError
 
 
 class TestAuthenticate:
@@ -95,7 +95,7 @@ class TestFetchLibrary:
                     json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
                 )
             if request.url.path == "/api/v10/library":
-                return httpx.Response(200, json={"books": books})
+                return httpx.Response(200, json={"audiobooks": books})
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
@@ -125,10 +125,10 @@ class TestFetchLibrary:
             if request.url.path == "/api/v10/library" and "page" not in request.url.params:
                 return httpx.Response(
                     200,
-                    json={"books": page1_books, "next_page": "/api/v10/library?page=2"},
+                    json={"audiobooks": page1_books, "next_page": "/api/v10/library?page=2"},
                 )
             if "page=2" in str(request.url):
-                return httpx.Response(200, json={"books": page2_books})  # no next_page → stop
+                return httpx.Response(200, json={"audiobooks": page2_books})  # no next_page → stop
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
@@ -150,3 +150,59 @@ class TestFetchLibrary:
 
         with pytest.raises(AuthError, match="Not authenticated"):
             client.fetch_library()
+
+
+
+class TestFetchM4BUrl:
+    """M4B download URL lookup — GET /api/v10/audiobooks/{isbn}/packaged_m4b."""
+
+    def test_returns_download_url_when_m4b_available(self):
+        """Book with M4B format available → returns CDN URL string."""
+        client = LibroFmClient(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9781234567890/packaged_m4b":
+                return httpx.Response(
+                    200,
+                    json={"m4b_url": "https://cdn.libro.fm/audiobooks/9781234567890.m4b"},
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client.authenticate(transport=transport)
+        url = client.fetch_m4b_url("9781234567890", transport=transport)
+
+        assert url == "https://cdn.libro.fm/audiobooks/9781234567890.m4b"
+
+    def test_raises_m4b_unavailable_on_404(self):
+        """Book without M4B format → raises M4BUnavailableError."""
+        client = LibroFmClient(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9780000000001/packaged_m4b":
+                return httpx.Response(404)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client.authenticate(transport=transport)
+
+        with pytest.raises(M4BUnavailableError, match="M4B not available for ISBN 9780000000001"):
+            client.fetch_m4b_url("9780000000001", transport=transport)
