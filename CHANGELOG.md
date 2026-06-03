@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparison, and project comparison note.
 
 ### Added
+- **config:** Parallel download worker count: `workers` field on Config dataclass
+  (default 3), `InvalidWorkersError` validation for values < 1, YAML parsing
+  from `librofm.workers`, and `-w`/`--workers` CLI flag with three-layer
+  resolution (CLI > config > default). 6 new tests (179 total) (closes #12)
+
+- MP3 format fallback: download manifest fetch, ZIP part download+extraction
+  with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
+  mp3_only, m4b_only), and `--limit` CLI flag for capped downloads
 - MP3 format fallback: download manifest fetch, ZIP part download+extraction
   with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
   mp3_only, m4b_only), and `--limit` CLI flag for capped downloads

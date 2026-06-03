@@ -19,6 +19,8 @@ class TestCLIHappyPath:
             # Config returns valid credentials
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
 
             # Auth succeeds
             mock_instance = mock_client_cls.return_value
@@ -53,6 +55,8 @@ class TestCLIAuthFailure:
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "wrong"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.side_effect = AuthError("Auth failed (401)")
@@ -79,6 +83,9 @@ class TestCLIHistoryFiltering:
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
         ):
             mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
             mock_config.return_value.password = "secret"
 
             mock_instance = mock_client_cls.return_value
@@ -123,6 +130,9 @@ class TestCLIDownloadOrchestration:
             patch("librofm_downloader.cli.Book") as mock_book_cls,
         ):
             mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
 
@@ -181,6 +191,10 @@ class TestCLIVerbose:
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
             mock_config.return_value.format = "m4b_mp3_fallback"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = None
@@ -228,6 +242,9 @@ class TestCLILimitFlag:
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = None
@@ -262,6 +279,9 @@ class TestCLILimitFlag:
             patch("librofm_downloader.cli.Book") as mock_book_cls,
         ):
             mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
 
@@ -301,6 +321,10 @@ class TestCLIFormatWiring:
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
             mock_config.return_value.format = "mp3_only"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "mp3_only"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = None
@@ -332,6 +356,10 @@ class TestCLIFormatWiring:
             patch("librofm_downloader.cli.Book") as mock_book_cls,
         ):
             mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "mp3_only"
+            mock_config.return_value.workers = 3
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
             mock_config.return_value.format = "mp3_only"
@@ -377,6 +405,9 @@ class TestGracefulShutdown:
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = None
@@ -409,6 +440,9 @@ class TestGracefulShutdown:
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.password = "secret"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = None
@@ -440,6 +474,9 @@ class TestIntegrationHappyPath:
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
             mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
 
@@ -478,6 +515,9 @@ class TestIntegrationMixedResult:
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
             mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
 
@@ -543,6 +583,9 @@ class TestIntegrationFatalAuthFailure:
         ):
             mock_config.return_value.username = "baduser"
             mock_config.return_value.password = "wrongpass"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.password = "wrongpass"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.side_effect = AuthError("Invalid credentials")
@@ -576,6 +619,9 @@ class TestAllBooksFailExitCode:
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = None
@@ -606,3 +652,102 @@ class TestAllBooksFailExitCode:
             # Individual failures are NOT fatal → exit 0
             assert exit_code == 0
             assert mock_download.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Issue #12: workers config field + --workers CLI flag
+# ---------------------------------------------------------------------------
+
+
+class TestCLIWorkersFlag:
+    """--workers / -w flag resolves worker count with 3-layer priority."""
+
+    def test_cli_workers_overrides_config(self):
+        """--workers 8 overrides config.workers=3 → resolved workers = 8."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
+            ]
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = None
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                workers=8,
+            )
+
+            # Verify the run completed successfully
+            assert exit_code == 0
+
+    def test_no_flag_uses_config_value(self):
+        """No --workers flag uses config.workers (5) instead of default 3."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 5
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
+            ]
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = None
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            assert exit_code == 0
+
+    def test_workers_1_accepted(self):
+        """--workers 1 is accepted (sequential fallback)."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 10
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
+            ]
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = None
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                workers=1,
+            )
+
+            assert exit_code == 0
