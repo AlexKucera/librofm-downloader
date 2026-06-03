@@ -181,6 +181,7 @@ def download_zip_part(
     url: str,
     output_dir: Path | str,
     transport: httpx.BaseTransport | None = None,
+    progress: "Callable[[int], None] | None" = None,
 ) -> list[Path]:
     """Download a single ZIP part and extract its contents.
 
@@ -222,8 +223,19 @@ def download_zip_part(
     with client.stream("GET", url, headers=headers) as resp:
         resp.raise_for_status()
         with open(partial_path, mode) as f:
+            downloaded = resume_from
+            content_length: int | None = None
             for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
                 f.write(chunk)
+                downloaded += len(chunk)
+                if progress:
+                    if content_length is None:
+                        cl_header = resp.headers.get("content-length")
+                        if cl_header:
+                            content_length = int(cl_header)
+                        progress(downloaded, total=content_length)
+                    else:
+                        progress(downloaded)
 
     # Atomic rename from .partial to .zip
     partial_path.rename(zip_path)
@@ -251,6 +263,7 @@ def download_m4b(
     url: str,
     output_path: Path | str,
     transport: httpx.BaseTransport | None = None,
+    progress: "Callable[[int], None] | None" = None,
 ) -> Path:
     """Download an M4B file via streaming chunks.
 
@@ -289,8 +302,19 @@ def download_m4b(
         resp.raise_for_status()
 
         with open(partial_path, mode) as f:
+            downloaded = resume_from
+            content_length: int | None = None
             for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
                 f.write(chunk)
+                downloaded += len(chunk)
+                if progress:
+                    if content_length is None:
+                        cl_header = resp.headers.get("content-length")
+                        if cl_header:
+                            content_length = int(cl_header)
+                        progress(downloaded, total=content_length)
+                    else:
+                        progress(downloaded)
 
     # Atomic rename from .partial to final filename
     partial_path.rename(output_path)
@@ -325,6 +349,7 @@ def download_book(
     format_strategy: str = "m4b_mp3_fallback",
     config: "Config | None" = None,
     transport: httpx.BaseTransport | None = None,
+    progress: "Callable[[int], None] | None" = None,
 ) -> Path | None:
     """Orchestrate a single book download with format strategy.
 
@@ -352,7 +377,7 @@ def download_book(
             m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
             title_sanitized = sanitize(book.title)
             m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport)
+            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress)
             _write_history(history, book, "m4b", str(result))
             if config:
                 download_accompanying_files(book, output_dir, config, client=client, transport=transport)
@@ -379,7 +404,7 @@ def download_book(
             m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
             title_sanitized = sanitize(book.title)
             m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport)
+            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress)
             _write_history(history, book, "m4b", str(result))
             if config:
                 download_accompanying_files(book, output_dir, config, client=client, transport=transport)
@@ -397,6 +422,7 @@ def _download_mp3(
     output_dir: Path,
     history: "DownloadHistory",
     transport: httpx.BaseTransport | None = None,
+    progress: "Callable[[int], None] | None" = None,
 ) -> Path | None:
     """Fetch MP3 manifest and download all ZIP parts."""
     try:
@@ -413,7 +439,7 @@ def _download_mp3(
     all_extracted: list[Path] = []
     for part in parts:
         part_url = part["url"]
-        extracted = download_zip_part(part_url, output_dir, transport=transport)
+        extracted = download_zip_part(part_url, output_dir, transport=transport, progress=progress)
         all_extracted.extend(extracted)
 
     # Record first extracted file as representative path
@@ -511,6 +537,7 @@ def download_accompanying_files(
     config: "Config",
     client: "LibroFmClient | None" = None,
     transport: httpx.BaseTransport | None = None,
+    progress: "Callable[[int], None] | None" = None,
 ) -> list[Path]:
     """Download PDF extras and/or cover art for a book.
 

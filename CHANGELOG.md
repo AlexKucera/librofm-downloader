@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`download_extras`, `download_covers`), streaming .partial → atomic
   rename pattern, non-critical failure handling (warnings only), and
   output structure verification (subdirectory vs flat layout)
+- TTY-aware download reporting: rich progress bars with live %/ETA/speed/
+  file size for interactive terminals, plain log lines for pipes/cron,
+  Content-Length-driven total so percentage works from first chunk,
+  per-book failure isolation (one failed book doesn't stop batch),
+  and fatal error immediate-exit before download loop starts
 - 12 new tests covering PDF URL fetch, cover/PDF download, .partial
   cleanup, config toggle behavior, failure handling, and directory layout
   (134 total)

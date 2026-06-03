@@ -9,6 +9,7 @@ from librofm_downloader.config import load_config, ConfigError
 from librofm_downloader.client import LibroFmClient, AuthError
 from librofm_downloader.history import DownloadHistory
 from librofm_downloader.downloader import Book, download_book
+from librofm_downloader.progress import DownloadReporter
 
 console = Console()
 
@@ -99,7 +100,8 @@ def run(
         console.print("[green]All caught up! No new books to download.[/green]")
         return 0
 
-    # 5. Download loop
+    # 5. Download loop with TTY-aware reporting
+    reporter = DownloadReporter()
     console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
 
     downloaded = 0
@@ -113,9 +115,9 @@ def run(
         # Narrators are nested inside audiobook_info in the API response
         audiobook_info = raw_book.get("audiobook_info", {}) or {}
         narrators = audiobook_info.get("narrators", []) or raw_book.get("narrators", [])
-        console.print(f"  ⬇ {title}  [dim]({isbn})[/dim]")
 
         if verbose:
+            console.print(f"  ⬇ {title}  [dim]({isbn})[/dim]")
             console.print(f"     authors:   {', '.join(authors) or '?'}")
             console.print(f"     narrators: {', '.join(narrators) or '?'}")
 
@@ -135,6 +137,7 @@ def run(
         )
 
         try:
+            reporter.start_download(book)
             result = download_book(
                 book=book,
                 client=client,
@@ -142,24 +145,25 @@ def run(
                 history=history,
                 format_strategy=config.format,
                 config=config,
+                progress=reporter.update,
             )
             if result is None:
                 console.print(f"    [yellow]⏭ Skipped[/yellow]")
                 skipped += 1
             else:
-                console.print(f"    [green]✓ Downloaded → {result}[/green]")
+                reporter.complete(book)
                 if verbose:
                     console.print(f"    [dim]  {result.stat().st_size:,} bytes[/dim]")
                 downloaded += 1
         except Exception as exc:
-            console.print(f"    [red]✗ Failed: {exc}[/red]")
+            reporter.fail(book, reason=str(exc))
             if verbose:
                 import traceback
                 traceback.print_exc()
             failed += 1
 
-    # 6. Summary
-    console.print(f"\n[bold]Summary:[/bold] {downloaded} downloaded, {skipped} skipped, {failed} failed")
+
+    reporter.summary(downloaded=downloaded, skipped=skipped, failed=failed)
 
     if verbose:
         console.print("[dim]── done ────────────────────────────────────────[/dim]")
