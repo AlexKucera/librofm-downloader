@@ -37,16 +37,16 @@ PUBLICATION_DAY.
 
 ### **Default Path Behavior**
 Not a static pattern — conditional on series data:
-- **With series:** FIRST_AUTHOR/SERIES_NAME/SERIES_NUM BOOK_TITLE
-- **Without series:** FIRST_AUTHOR/BOOK_TITLE
+- **With series:** <FIRST_AUTHOR>/<SERIES_NAME>/Book <SERIES_NUM> <BOOK_TITLE>
+- **Without series:** <FIRST_AUTHOR>/<BOOK_TITLE>
 
 Custom PATH_PATTERN in config overrides this default.
 
 ### **Output Structure**
 - Book with accompanying files (PDF extras, cover art) → subdirectory:
-  `Author/Series/1 Book Title/Book Title.m4b` (+ pdf, cover inside)
+  `Author/Series/Book 1 Book Title/Book Title.m4b` (+ pdf, cover inside)
 - Book without accompanying files → file is leaf node:
-  `Author/Series/2 Another Book.m4b` or `Author/Standalone Book.m4b`
+  `Author/Series/Book 2 Another Book.m4b` or `Author/Standalone Book.m4b`
 
 ### **Accompanying Files**
 PDF extras and cover art. Their presence triggers subdirectory creation

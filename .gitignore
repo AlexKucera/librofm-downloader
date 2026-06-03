@@ -127,3 +127,7 @@ dmypy.json
 secrets.yaml
 download_history.json
 *.partial
+
+.pi/extensions/guardrails.json
+
+.pi/improvements.db
