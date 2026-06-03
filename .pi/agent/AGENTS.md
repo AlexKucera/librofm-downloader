@@ -8,4 +8,5 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
 |------|------|------|---------|
+| 2026-06-03 | slice | [20260603-slice-3a-path-resolution-and-sanitization-issue4_log.md](docs/devlog/20260603-slice-3a-path-resolution-and-sanitization-issue4_log.md) | **Issue #4 Complete:** Path resolution + sanitization + Book model + custom patterns. 56 new tests, **97 total** · **16/16 AC** |
 | 2026-06-03 | issue | [20260603-project-scaffolding-and-config-module-issue2_log.md](docs/devlog/20260603-project-scaffolding-and-config-module-issue2_log.md) | **Issue #2 Complete:** pyproject.toml + venv + config module (load/merge/validate) + 25 tests. 11/11 AC met |

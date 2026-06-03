@@ -13,3 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OAuth2 client with password grant auth and paginated library fetch
 - Download history tracking with corrupt JSON recovery
 - CLI skeleton wiring config → auth → library → filter → print
+- Path resolution with default conditional patterns and custom token substitution
+- Filesystem-safe component sanitization (illegal chars, control chars, colons)
+- Immutable Book dataclass for typed book metadata
+- Subdirectory decision logic based on PDF extras or cover art presence
