@@ -353,5 +353,6 @@ class TestCLIFormatWiring:
             )
 
             captured = capsys.readouterr()
-            assert "Downloaded" in captured.out
-            assert "Skipped" not in captured.out or "Downloaded" in captured.out
+            # Reporter now outputs "Completed:" for successful downloads (Issue #8)
+            assert "Completed" in captured.out
+            assert "Skipped" not in captured.out or "Completed" in captured.out
