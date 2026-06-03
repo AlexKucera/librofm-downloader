@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against implementation. Polished README with badges, features table, format
   comparison, and project comparison note.
 
+### Fixed
+
+- **history:** Make `DownloadHistory.write()` thread-safe with
+  `threading.Lock` so concurrent worker threads don't corrupt or lose
+  history entries during parallel downloads. Lock guards both in-memory
+  mutation and disk flush. 5 new tests (184 total) (closes #13)
+
 ### Added
 - **config:** Parallel download worker count: `workers` field on Config dataclass
   (default 3), `InvalidWorkersError` validation for values < 1, YAML parsing
