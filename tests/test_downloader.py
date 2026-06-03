@@ -11,6 +11,7 @@ from librofm_downloader.downloader import (
     resolve_path,
     sanitize,
     download_m4b,
+    download_zip_part,
     download_book,
 )
 from librofm_downloader.client import LibroFmClient
@@ -431,6 +432,127 @@ class TestNeedsSubdirectory:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# MP3 ZIP download + extraction — Issue #6
+# ---------------------------------------------------------------------------
+
+import zipfile
+import io
+
+
+class TestDownloadZipPart:
+    """Download a single ZIP part with .partial tracking and extraction."""
+
+    def test_downloads_zip_and_extracts_mp3_files(self):
+        """Successful ZIP download writes .partial, renames, extracts .mp3 files."""
+        # Create a valid ZIP containing two MP3 files
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("track01.mp3", b"fake-audio-data-01")
+            zf.writestr("track02.mp3", b"fake-audio-data-02")
+        zip_payload = zip_buf.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=zip_payload)
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "extracted"
+            output_dir.mkdir()
+            zip_url = "https://cdn.libro.fm/part1.zip"
+
+            result = download_zip_part(
+                url=zip_url,
+                output_dir=output_dir,
+                transport=transport,
+            )
+
+            # MP3 files extracted
+            assert (output_dir / "track01.mp3").exists()
+            assert (output_dir / "track02.mp3").exists()
+            assert (output_dir / "track01.mp3").read_bytes() == b"fake-audio-data-01"
+            assert (output_dir / "track02.mp3").read_bytes() == b"fake-audio-data-02"
+            # No .partial left behind
+            assert not list(output_dir.glob("*.partial"))
+
+    def test_handles_corrupt_zip_gracefully(self):
+        """Corrupt/invalid ZIP data → raises error, no crash, no partial left."""
+        corrupt_payload = b"this-is-not-a-zip-file-at-all"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=corrupt_payload)
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "extracted"
+            output_dir.mkdir()
+
+            with pytest.raises((zipfile.BadZipFile, Exception)):
+                download_zip_part(
+                    url="https://cdn.libro.fm/corrupt.zip",
+                    output_dir=output_dir,
+                    transport=transport,
+                )
+
+            # No partial file left behind
+            assert not list(output_dir.glob("*.partial"))
+
+    def test_resumes_from_partial_zip_file(self):
+        """Existing .partial file → sends Range header, appends, then extracts."""
+        # Full ZIP payload (one MP3)
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("resume_track.mp3", b"complete-audio")
+        full_payload = zip_buf.getvalue()
+
+        # Split into first half + second half
+        mid = len(full_payload) // 2
+        first_half = full_payload[:mid]
+        second_half = full_payload[mid:]
+        range_header_seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            range_header_seen.append(request.headers.get("range", ""))
+            rh = request.headers.get("range")
+            if rh == f"bytes={mid}-":
+                return httpx.Response(
+                    206,
+                    content=second_half,
+                    headers={
+                        "content-range": f"bytes {mid}-{len(full_payload)-1}/{len(full_payload)}",
+                        "content-length": str(len(second_half)),
+                    },
+                )
+            return httpx.Response(400, text="Expected Range header")
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "extracted"
+            output_dir.mkdir()
+            # _part_filename_from_url("https://cdn.libro.fm/resume.zip") → "resume"
+            partial_path = output_dir / "resume.zip.partial"
+
+            # Pre-create partial file simulating interrupted download
+            partial_path.write_bytes(first_half)
+
+            result = download_zip_part(
+                url="https://cdn.libro.fm/resume.zip",
+                output_dir=output_dir,
+                transport=transport,
+            )
+
+            # Range header was sent with correct offset
+            assert f"bytes={mid}-" in range_header_seen
+            # Extracted file exists with correct content
+            assert (output_dir / "resume_track.mp3").exists()
+            assert (output_dir / "resume_track.mp3").read_bytes() == b"complete-audio"
+            # No .partial left behind
+            assert not partial_path.exists()
+
+
 class TestDownloadM4B:
     """Streaming chunked download with .partial → atomic rename to .m4b."""
 
@@ -779,3 +901,242 @@ class TestDownloadBook:
             # No extra subdirectory between author and file
             assert result.parent.name == "Solo Author"
             assert result.exists()
+
+
+# ---------------------------------------------------------------------------
+# Format strategy selector — Issue #6
+# ---------------------------------------------------------------------------
+
+
+class TestFormatStrategy:
+    """download_book respects the format strategy config."""
+
+    @staticmethod
+    def _make_mp3_zip() -> bytes:
+        """Create a valid ZIP with one MP3 file for testing."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("chapter01.mp3", b"mp3-audio-data")
+        return buf.getvalue()
+
+    def test_m4b_mp3_fallback_tries_m4b_first(self):
+        """m4b_mp3_fallback: M4B available → downloads M4B, never queries MP3."""
+        m4b_payload = b"real-m4b-data"
+        mp3_calls: list[None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            # M4B is available
+            if request.url.path == "/api/v10/audiobooks/9781111111111/packaged_m4b":
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/book.m4b"})
+            # CDN serves M4B
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=m4b_payload)
+            # Track that manifest endpoint was called (should NOT happen)
+            if request.url.path == "/api/v10/download-manifest":
+                mp3_calls.append(None)
+                return httpx.Response(
+                    200,
+                    json={"parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}], "tracks": []},
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(title="M4B Available", authors=["A"], narrators=["N"], isbn="9781111111111")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            result = download_book(
+                book=book,
+                client=client,
+                output_base=base_dir,
+                history=history,
+                format_strategy="m4b_mp3_fallback",
+                transport=transport,
+            )
+
+            # M4B was downloaded (not MP3)
+            assert result is not None
+            assert result.suffix == ".m4b"
+            # Manifest was never queried
+            assert len(mp3_calls) == 0
+            # History records M4B format
+            entry = history.find("9781111111111")
+            assert entry is not None
+            assert entry.format == "m4b"
+
+    def test_m4b_mp3_fallback_falls_back_to_mp3_on_404(self):
+        """m4b_mp3_fallback: M4B returns 404 → fetches manifest, downloads ZIP."""
+        mp3_zip_payload = self._make_mp3_zip()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            # M4B NOT available
+            if request.url.path == "/api/v10/audiobooks/9782222222222/packaged_m4b":
+                return httpx.Response(404)
+            # MP3 manifest available
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [
+                            {"url": "https://cdn.example.com/p1.zip", "name": "p1"},
+                        ],
+                        "tracks": [{"number": 1, "chapter_title": "Ch 1"}],
+                    },
+                )
+            # CDN serves ZIP
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(title="MP3 Fallback Book", authors=["A"], narrators=["N"], isbn="9782222222222")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            result = download_book(
+                book=book,
+                client=client,
+                output_base=base_dir,
+                history=history,
+                format_strategy="m4b_mp3_fallback",
+                transport=transport,
+            )
+
+            # MP3 files were extracted
+            assert result is not None
+            # At least one .mp3 file exists in output tree
+            mp3_files = list(base_dir.rglob("*.mp3"))
+            assert len(mp3_files) >= 1
+            # History records mp3 format
+            entry = history.find("9782222222222")
+            assert entry is not None
+            assert entry.format == "mp3"
+
+    def test_mp3_only_skips_m4b_query(self):
+        """mp3_only: Never queries M4B endpoint, goes straight to manifest."""
+        mp3_zip_payload = self._make_mp3_zip()
+        m4b_calls: list[None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            # Track M4B calls (should NOT happen in mp3_only mode)
+            if "/packaged_m4b" in request.url.path:
+                m4b_calls.append(None)
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/book.m4b"})
+            # MP3 manifest
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [
+                            {"url": "https://cdn.example.com/p1.zip", "name": "p1"},
+                        ],
+                        "tracks": [],
+                    },
+                )
+            # CDN serves ZIP
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(title="MP3 Only Book", authors=["A"], narrators=["N"], isbn="9783333333333")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            result = download_book(
+                book=book,
+                client=client,
+                output_base=base_dir,
+                history=history,
+                format_strategy="mp3_only",
+                transport=transport,
+            )
+
+            # MP3 files extracted
+            assert result is not None
+            mp3_files = list(base_dir.rglob("*.mp3"))
+            assert len(mp3_files) >= 1
+            # M4B was never queried
+            assert len(m4b_calls) == 0
+            # History records mp3 format
+            entry = history.find("9783333333333")
+            assert entry is not None
+            assert entry.format == "mp3"
+
+    def test_m4b_only_skips_when_unavailable(self):
+        """m4b_only: No M4B available → returns None (skip), no MP3 fallback."""
+        manifest_calls: list[None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9780000000000/packaged_m4b":
+                return httpx.Response(404)
+            # Track manifest calls (should NOT happen in m4b_only mode)
+            if request.url.path == "/api/v10/download-manifest":
+                manifest_calls.append(None)
+                return httpx.Response(200, json={"parts": [], "tracks": []})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
+        client.authenticate(transport=transport)
+
+        book = Book(title="No M4B Skip", authors=["A"], narrators=["N"], isbn="9780000000000")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            history_path = Path(tmpdir) / "history.json"
+            history = DownloadHistory(history_path)
+
+            result = download_book(
+                book=book,
+                client=client,
+                output_base=base_dir,
+                history=history,
+                format_strategy="m4b_only",
+                transport=transport,
+            )
+
+            # Skipped (no M4B)
+            assert result is None
+            # Manifest was never queried
+            assert len(manifest_calls) == 0
+            # No history entry
+            assert history.is_downloaded("9780000000000") is False

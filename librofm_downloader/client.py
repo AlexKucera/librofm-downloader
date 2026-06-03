@@ -137,3 +137,42 @@ class LibroFmClient:
         resp.raise_for_status()
         data = resp.json()
         return data["m4b_url"]
+
+    def fetch_download_manifest(
+        self,
+        isbn: str,
+        transport: httpx.BaseTransport | None = None,
+    ) -> dict:
+        """Fetch the MP3 download manifest for a given ISBN.
+
+        Args:
+            isbn: The ISBN of the audiobook.
+            transport: Optional httpx transport override for testing.
+
+        Returns:
+            Dict with ``parts`` (list of {url, name}) and
+            ``tracks`` (list of {number, chapter_title}).
+
+        Raises:
+            AuthError: If not authenticated.
+            M4BUnavailableError: If the book has no MP3 format available (404).
+        """
+        if not self._access_token:
+            raise AuthError("Not authenticated. Call authenticate() first.")
+
+        headers = {**self.DEFAULT_HEADERS, "Authorization": f"Bearer {self._access_token}"}
+
+        client = httpx.Client(
+            base_url=self._base_url,
+            headers=headers,
+            timeout=self._timeout,
+            transport=transport,
+        )
+
+        resp = client.get("/api/v10/download-manifest", params={"isbn": isbn})
+
+        if resp.status_code == 404:
+            raise M4BUnavailableError(f"MP3 manifest not available for ISBN {isbn}")
+
+        resp.raise_for_status()
+        return resp.json()

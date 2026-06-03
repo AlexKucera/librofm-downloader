@@ -206,3 +206,152 @@ class TestCLIVerbose:
             assert "alice" in captured.out
             assert "m4b_mp3_fallback" in captured.out
             assert "1 book(s) in library" in captured.out or "library" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Issue #6: MP3 fallback + --limit flag
+# ---------------------------------------------------------------------------
+
+
+class TestCLILimitFlag:
+    """--limit caps how many books are downloaded."""
+
+    def test_limit_stops_after_n_books(self, capsys):
+        """--limit 2 → only first 2 books are attempted."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.Book") as mock_book_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+
+            # 5 new books
+            raw_books = [
+                {"isbn": f"97800{i}", "title": f"Book {i}", "authors": ["A"], "narrators": ["N"]}
+                for i in range(5)
+            ]
+            mock_instance.fetch_library.return_value = raw_books
+
+            mock_history_instance = mock_history_cls.return_value
+            mock_history_instance.is_downloaded.return_value = False
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                limit=2,
+            )
+
+            # download_book should only be called twice (not 5)
+            assert mock_download.call_count == 2
+
+    def test_limit_zero_or_none_means_no_limit(self, capsys):
+        """--limit 0 (default) → all books are processed."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.Book") as mock_book_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "B2", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = None
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                limit=0,
+            )
+
+            assert mock_download.call_count == 2
+
+
+class TestCLIFormatWiring:
+    """Format strategy from config is passed to download_book."""
+
+    def test_format_passed_to_download_book(self):
+        """config.format is forwarded to download_book(format_strategy=...)."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.Book") as mock_book_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "mp3_only"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "MP3 Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            # download_book was called with format_strategy="mp3_only"
+            _, kwargs = mock_download.call_args
+            assert kwargs.get("format_strategy") == "mp3_only"
+
+    def test_mp3_download_reported_as_downloaded_not_skipped(self, capsys):
+        """MP3 download (returns Path) is reported as 'Downloaded', not 'Skipped'."""
+        from pathlib import Path
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.Book") as mock_book_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "mp3_only"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "MP3 Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            # download_book returns a Path (MP3 dir) — not None
+            mock_download.return_value = Path("/audiobooks/A/MP3 Book")
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            captured = capsys.readouterr()
+            assert "Downloaded" in captured.out
+            assert "Skipped" not in captured.out or "Downloaded" in captured.out

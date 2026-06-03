@@ -18,6 +18,7 @@ def run(
     secrets_path: str = "secrets.yaml",
     history_path: str = "download_history.json",
     verbose: bool = False,
+    limit: int = 0,
 ) -> int:
     """Main pipeline: load config → auth → fetch library → filter → download → summary.
 
@@ -87,6 +88,8 @@ def run(
 
     history = DownloadHistory(history_path)
     new_books = [b for b in books if not history.is_downloaded(b.get("isbn", ""))]
+    if limit:
+        new_books = new_books[:limit]
 
     if verbose:
         downloaded_count = len(books) - len(new_books)
@@ -137,9 +140,10 @@ def run(
                 client=client,
                 output_base=config.output_dir,
                 history=history,
+                format_strategy=config.format,
             )
             if result is None:
-                console.print(f"    [yellow]⏭ Skipped (no M4B available)[/yellow]")
+                console.print(f"    [yellow]⏭ Skipped[/yellow]")
                 skipped += 1
             else:
                 console.print(f"    [green]✓ Downloaded → {result}[/green]")
@@ -170,6 +174,13 @@ if __name__ == "__main__":
     parser.add_argument("--secrets", default="secrets.yaml", help="Path to secrets.yaml")
     parser.add_argument("--history", default="download_history.json", help="Path to download history JSON")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output (URLs, sizes, tracebacks)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Maximum number of books to download (0 = no limit). Useful for testing.",
+    )
     args = parser.parse_args()
 
     sys.exit(run(
@@ -177,4 +188,5 @@ if __name__ == "__main__":
         secrets_path=args.secrets,
         history_path=args.history,
         verbose=args.verbose,
+        limit=args.limit,
     ))

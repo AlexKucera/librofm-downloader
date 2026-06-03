@@ -133,3 +133,7 @@ download_history.json
 .pi/improvements.db
 
 audiobooks/
+
+config.yaml
+
+.DS_Store

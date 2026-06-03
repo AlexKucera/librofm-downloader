@@ -159,12 +159,92 @@ def needs_subdirectory(book: Book) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# M4B streaming download
+# MP3 ZIP download + extraction
 # ---------------------------------------------------------------------------
 
-# Constants for M4B download
+import zipfile as _zipfile
+
+# Constants for downloads
 
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
+
+
+def _part_filename_from_url(url: str) -> str:
+    """Derive a safe filename from a URL's last path component."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    name = Path(parsed.path).stem or "download"
+    return sanitize(name)
+
+
+def download_zip_part(
+    url: str,
+    output_dir: Path | str,
+    transport: httpx.BaseTransport | None = None,
+) -> list[Path]:
+    """Download a single ZIP part and extract its contents.
+
+    Downloads to ``{name}.zip.partial`` during transfer, renames to
+    ``{name}.zip`` on completion, then extracts all files into *output_dir*.
+
+    Args:
+        url: The CDN URL for this ZIP part.
+        output_dir: Directory where extracted files are written.
+        transport: Optional httpx transport override for testing.
+
+    Returns:
+        List of Paths to extracted files.
+
+    Raises:
+        zipfile.BadZipFile: If downloaded data is not valid ZIP.
+        httpx.HTTPStatusError: On HTTP errors.
+    """
+    output_dir = Path(output_dir)
+    part_name = _part_filename_from_url(url)
+    zip_path = output_dir / f"{part_name}.zip"
+    partial_path = output_dir / f"{part_name}.zip.partial"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resume support
+    resume_from = 0
+    if partial_path.exists():
+        resume_from = partial_path.stat().st_size
+        logger.info("Resuming ZIP part from byte %d", resume_from)
+
+    headers: dict[str, str] = {}
+    if resume_from > 0:
+        headers["Range"] = f"bytes={resume_from}-"
+
+    client = httpx.Client(transport=transport, follow_redirects=True)
+    mode = "ab" if resume_from > 0 else "wb"
+
+    with client.stream("GET", url, headers=headers) as resp:
+        resp.raise_for_status()
+        with open(partial_path, mode) as f:
+            for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                f.write(chunk)
+
+    # Atomic rename from .partial to .zip
+    partial_path.rename(zip_path)
+
+    # Extract all files from ZIP into output_dir
+    extracted: list[Path] = []
+    with _zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(output_dir)
+                for name in zf.namelist():
+                    extracted.append(output_dir / name)
+
+    # Clean up ZIP file after extraction
+    zip_path.unlink(missing_ok=True)
+
+    logger.info("Downloaded & extracted %s → %d file(s) in %s", url, len(extracted), output_dir)
+    return extracted
+
+
+# ---------------------------------------------------------------------------
+# M4B streaming download
+# ---------------------------------------------------------------------------
 
 
 def download_m4b(
@@ -219,54 +299,133 @@ def download_m4b(
     return output_path
 
 
+def _resolve_output_dir(book: Book, output_base: Path | str) -> Path:
+    """Resolve the output directory for a book (parent of the actual file).
+
+    For books with accompanying files → subdirectory: base/Author/Series/Book Title/
+    For standalone books → parent dir only: base/Author/  (file is leaf: Title.m4b)
+    """
+    base = Path(output_base)
+    first_author = sanitize(book.authors[0] if book.authors else 'Unknown')
+
+    if needs_subdirectory(book):
+        relative = resolve_path(book)
+        title_sanitized = sanitize(book.title)
+        return base / relative / title_sanitized
+
+    # Flat: file is leaf node under author dir
+    return base / first_author
+
+
 def download_book(
     book: Book,
     client: "LibroFmClient",
     output_base: Path | str,
     history: "DownloadHistory",
+    format_strategy: str = "m4b_mp3_fallback",
     transport: httpx.BaseTransport | None = None,
 ) -> Path | None:
-    """Orchestrate a single book download: resolve path → query M4B → download → history.
+    """Orchestrate a single book download with format strategy.
 
     Args:
         book: The book metadata.
         client: Authenticated LibroFmClient instance.
         output_base: Base directory for downloads.
         history: DownloadHistory instance to record successful downloads.
+        format_strategy: One of ``m4b_mp3_fallback``, ``mp3_only``, ``m4b_only``.
         transport: Optional httpx transport override for testing.
 
     Returns:
-        Path to the downloaded file, or None if M4B is unavailable (book skipped).
+        Path to the downloaded file/dir, or None if book is skipped.
     """
     from datetime import datetime, timezone
 
-    # 1. Resolve output path using Slice 3a logic
-    relative = resolve_path(book)
-    title_sanitized = sanitize(book.title)
+    output_dir = _resolve_output_dir(book, output_base)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if needs_subdirectory(book):
-        output_path = Path(output_base) / relative / f"{title_sanitized}.m4b"
-    else:
-        output_path = Path(output_base) / f"{relative}.m4b"
+    # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---
+    if format_strategy == "m4b_mp3_fallback":
+        # Try M4B first
+        try:
+            m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
+            title_sanitized = sanitize(book.title)
+            m4b_path = output_dir / f"{title_sanitized}.m4b"
+            result = download_m4b(m4b_url, m4b_path, transport=transport)
+            _write_history(history, book, "m4b", str(result))
+            return result
+        except M4BUnavailableError:
+            logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
-    # 2. Query M4B availability
+        # Fall back to MP3
+        return _download_mp3(book, client, output_dir, history, transport)
+
+    # --- mp3_only: skip M4B entirely ---
+    if format_strategy == "mp3_only":
+        return _download_mp3(book, client, output_dir, history, transport)
+
+    # --- m4b_only: skip book if M4B unavailable ---
+    if format_strategy == "m4b_only":
+        try:
+            m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
+            title_sanitized = sanitize(book.title)
+            m4b_path = output_dir / f"{title_sanitized}.m4b"
+            result = download_m4b(m4b_url, m4b_path, transport=transport)
+            _write_history(history, book, "m4b", str(result))
+            return result
+        except M4BUnavailableError:
+            logger.info("Skipping %s (%s): no M4B available (m4b_only mode)", book.title, book.isbn)
+            return None
+
+    raise ValueError(f"Unknown format strategy: {format_strategy}")
+
+
+def _download_mp3(
+    book: Book,
+    client: "LibroFmClient",
+    output_dir: Path,
+    history: "DownloadHistory",
+    transport: httpx.BaseTransport | None = None,
+) -> Path | None:
+    """Fetch MP3 manifest and download all ZIP parts."""
     try:
-        m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
+        manifest = client.fetch_download_manifest(book.isbn, transport=transport)
     except M4BUnavailableError:
-        logger.info("Skipping %s (%s): no M4B available", book.title, book.isbn)
+        logger.warning("MP3 manifest not available for %s (%s), skipping", book.title, book.isbn)
         return None
 
-    # 3. Download
-    result = download_m4b(m4b_url, output_path, transport=transport)
+    parts = manifest.get("parts", [])
+    if not parts:
+        logger.warning("Empty parts list in manifest for %s (%s), skipping", book.title, book.isbn)
+        return None
 
-    # 4. Write history entry (only after successful complete download)
+    all_extracted: list[Path] = []
+    for part in parts:
+        part_url = part["url"]
+        extracted = download_zip_part(part_url, output_dir, transport=transport)
+        all_extracted.extend(extracted)
+
+    # Record first extracted file as representative path
+    if all_extracted:
+        _write_history(history, book, "mp3", str(output_dir))
+        return output_dir
+
+    return None
+
+
+def _write_history(
+    history: "DownloadHistory",
+    book: Book,
+    fmt: str,
+    path: str,
+) -> None:
+    """Write a download history entry."""
+    from datetime import datetime, timezone
+
     entry = HistoryEntry(
         isbn=book.isbn,
         title=book.title,
-        format="m4b",
-        path=str(result),
+        format=fmt,
+        path=path,
         downloaded_at=datetime.now(timezone.utc).isoformat(),
     )
     history.write(entry)
-
-    return result
