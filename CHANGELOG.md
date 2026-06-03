@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `librofm.workers`, and `-w`/`--workers` CLI flag with three-layer
   resolution (CLI > config > default). 6 new tests (179 total) (closes #12)
 
+- **orchestrator:** ThreadPoolExecutor-based parallel download engine:
+  `download_all_books()` replaces sequential for-loop in cli.py, submitting all
+  books as futures with per-future failure isolation. Returns `OrchestratorResult`
+  dataclass with stable-sorted counts, failed_books as (Book, reason) tuples,
+  and skipped_books as Book objects. `_raw_to_book()` conversion extracted from
+  cli.py. 20 new tests (218 total) (closes #16)
+
 - MP3 format fallback: download manifest fetch, ZIP part download+extraction
   with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
   mp3_only, m4b_only), and `--limit` CLI flag for capped downloads
