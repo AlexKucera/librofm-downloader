@@ -356,3 +356,253 @@ class TestCLIFormatWiring:
             # Reporter now outputs "Completed:" for successful downloads (Issue #8)
             assert "Completed" in captured.out
             assert "Skipped" not in captured.out or "Completed" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Issue #9: Graceful Ctrl+C / KeyboardInterrupt
+# ---------------------------------------------------------------------------
+
+
+class TestGracefulShutdown:
+    """Ctrl+C produces a clean exit, not a Python traceback."""
+
+    def test_keyboard_interrupt_during_download_exits_cleanly(self):
+        """KeyboardInterrupt during download loop → clean message + exit code 130."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Book A", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "Book B", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            from pathlib import Path
+            mock_download.side_effect = [
+                Path("/audiobooks/A/Book A.m4b"),
+                KeyboardInterrupt,
+            ]
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            assert exit_code == 130
+
+    def test_keyboard_interrupt_before_downloads_exits_cleanly(self):
+        """KeyboardInterrupt during library fetch → clean exit."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.side_effect = KeyboardInterrupt
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            assert exit_code == 130
+
+
+# ---------------------------------------------------------------------------
+# Issue #9: Integration tests (full run() pipeline with mocked HTTP)
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrationHappyPath:
+    """Happy path: 3 new books → all download successfully."""
+
+    def test_three_books_all_download_successfully(self):
+        """Full pipeline: auth + library fetch + 3 downloads → exit 0 + summary."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Book A", "authors": ["Author A"], "narrators": ["N1"]},
+                {"isbn": "978222", "title": "Book B", "authors": ["Author B"], "narrators": ["N2"]},
+                {"isbn": "978333", "title": "Book C", "authors": ["Author C"], "narrators": ["N3"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            from pathlib import Path
+            mock_download.return_value = Path("/audiobooks/Author/Book.m4b")
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            assert exit_code == 0
+            assert mock_download.call_count == 3
+
+
+class TestIntegrationMixedResult:
+    """Mixed result: new downloads + skipped + failed → correct summary + exit 0."""
+
+    def test_mixed_result_shows_correct_summary_and_exit_code(self, capsys):
+        """2 download (1 M4B, 1 MP3), 1 skipped, 1 fails → summary lists all + exit 0."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            # 3 new books (none already downloaded — all enter download loop)
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "New Book A", "authors": ["Author A"], "narrators": ["N1"]},
+                {"isbn": "978222", "title": "New Book B", "authors": ["Author B"], "narrators": ["N2"]},
+                {"isbn": "978333", "title": "Skip Book C", "authors": ["Author C"], "narrators": ["N3"]},
+                {"isbn": "978444", "title": "Fail Book D", "authors": ["Author D"], "narrators": ["N4"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            from pathlib import Path
+            import httpx
+            # 2 succeed, 1 returns None (skipped/no format), 1 raises error
+            mock_download.side_effect = [
+                Path("/audiobooks/A/New Book A.m4b"),
+                Path("/audiobooks/B/New Book B.mp3"),
+                None,  # skipped (no format available)
+                httpx.HTTPStatusError(
+                    message="Not Found",
+                    request=httpx.Request("GET", "https://example.com/fail"),
+                    response=httpx.Response(404, request=httpx.Request("GET", "https://example.com/fail")),
+                ),
+            ]
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            assert exit_code == 0
+            assert mock_download.call_count == 4
+            captured = capsys.readouterr()
+            output = captured.out
+            # Summary should show counts
+            assert "Summary:" in output
+            assert "2 downloaded" in output
+            # Failed book should be listed with ISBN and title
+            assert "978444" in output
+            assert "Fail Book D" in output
+            assert "404" in output or "Not Found" in output
+            # Skipped book should be listed
+            assert "978333" in output
+            assert "Skip Book C" in output
+
+
+class TestIntegrationFatalAuthFailure:
+    """Fatal path: auth fails → exit 1, no downloads attempted."""
+
+    def test_auth_failure_returns_exit_code_1_no_downloads(self, capsys):
+        """Authentication failure → exit code 1, download_book never called."""
+        from librofm_downloader.client import AuthError
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "baduser"
+            mock_config.return_value.password = "wrongpass"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.side_effect = AuthError("Invalid credentials")
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            assert exit_code == 1
+            mock_download.assert_not_called()
+
+            captured = capsys.readouterr()
+            assert "Authentication failed" in captured.out
+
+
+class TestAllBooksFailExitCode:
+    """When every book fails individually, exit code is still 0 (non-fatal)."""
+
+    def test_all_books_fail_returns_exit_code_0(self):
+        """All 3 books fail with exceptions → exit 0, not 1."""
+        import httpx
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.cli.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Fail A", "authors": ["A"], "narrators": ["N"]},
+                {"isbn": "978222", "title": "Fail B", "authors": ["B"], "narrators": ["N"]},
+                {"isbn": "978333", "title": "Fail C", "authors": ["C"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            mock_download.side_effect = [
+                httpx.HTTPStatusError(
+                    message="Server Error",
+                    request=httpx.Request("GET", "https://example.com/a"),
+                    response=httpx.Response(500, request=httpx.Request("GET", "https://example.com/a")),
+                ),
+                httpx.ConnectError("Connection refused"),
+                Exception("Download timed out"),
+            ]
+
+            exit_code = run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+            )
+
+            # Individual failures are NOT fatal → exit 0
+            assert exit_code == 0
+            assert mock_download.call_count == 3

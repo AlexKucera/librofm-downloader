@@ -30,145 +30,158 @@ def run(
         verbose: Print extra detail (URLs, paths, API responses).
 
     Returns:
-        Exit code: 0 on success, 1 on failure.
+        Exit code: 0 on success, 1 on fatal error, 130 on Ctrl+C interrupt.
     """
-    if verbose:
-        console.print("[dim]── config ──────────────────────────────────────[/dim]")
-        console.print(f"  config:  {config_path}")
-        console.print(f"  secrets: {secrets_path}")
-        console.print(f"  history: {history_path}")
-
-    # 1. Load config
-    try:
-        config = load_config(config_path, secrets_path)
-    except ConfigError as exc:
-        console.print(f"[red]Config error:[/red] {exc}")
-        return 1
-
-    if verbose:
-        console.print(f"  format:   {config.format}")
-        console.print(f"  output:   {config.output_dir}")
-        console.print(f"  extras:   {config.download_extras}")
-        console.print(f"  covers:   {config.download_covers}")
-        console.print(f"  user:     {config.username}")
-
-    # 2. Authenticate
-    if verbose:
-        console.print("[dim]── auth ────────────────────────────────────────[/dim]")
-
-    client = LibroFmClient(
-        username=config.username,
-        password=config.password,
-    )
 
     try:
-        client.authenticate()
-    except AuthError as exc:
-        console.print(f"[red]Authentication failed:[/red] {exc}")
-        return 1
+        if verbose:
+            console.print("[dim]── config ──────────────────────────────────────[/dim]")
+            console.print(f"  config:  {config_path}")
+            console.print(f"  secrets: {secrets_path}")
+            console.print(f"  history: {history_path}")
 
-    if verbose:
-        console.print("  [green]✓[/green] authenticated")
-
-    # 3. Fetch library
-    if verbose:
-        console.print("[dim]── library ─────────────────────────────────────[/dim]")
-
-    try:
-        books = client.fetch_library()
-    except Exception as exc:
-        console.print(f"[red]Failed to fetch library:[/red] {exc}")
-        return 1
-
-    if verbose:
-        console.print(f"  {len(books)} book(s) in library")
-
-    # 4. Filter already-downloaded
-    if verbose:
-        console.print("[dim]── filtering ───────────────────────────────────[/dim]")
-
-    history = DownloadHistory(history_path)
-    new_books = [b for b in books if not history.is_downloaded(b.get("isbn", ""))]
-    if limit:
-        new_books = new_books[:limit]
-
-    if verbose:
-        downloaded_count = len(books) - len(new_books)
-        console.print(f"  {downloaded_count} already downloaded, {len(new_books)} new")
-
-    if not new_books:
-        console.print("[green]All caught up! No new books to download.[/green]")
-        return 0
-
-    # 5. Download loop with TTY-aware reporting
-    reporter = DownloadReporter()
-    console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
-
-    downloaded = 0
-    skipped = 0
-    failed = 0
-
-    for raw_book in new_books:
-        title = raw_book.get("title", "Unknown")
-        isbn = raw_book.get("isbn", "?")
-        authors = raw_book.get("authors", [])
-        # Narrators are nested inside audiobook_info in the API response
-        audiobook_info = raw_book.get("audiobook_info", {}) or {}
-        narrators = audiobook_info.get("narrators", []) or raw_book.get("narrators", [])
+        # 1. Load config
+        try:
+            config = load_config(config_path, secrets_path)
+        except ConfigError as exc:
+            console.print(f"[red]Config error:[/red] {exc}")
+            return 1
 
         if verbose:
-            console.print(f"  ⬇ {title}  [dim]({isbn})[/dim]")
-            console.print(f"     authors:   {', '.join(authors) or '?'}")
-            console.print(f"     narrators: {', '.join(narrators) or '?'}")
+            console.print(f"  format:   {config.format}")
+            console.print(f"  output:   {config.output_dir}")
+            console.print(f"  extras:   {config.download_extras}")
+            console.print(f"  covers:   {config.download_covers}")
+            console.print(f"  user:     {config.username}")
 
-        book = Book(
-            title=title,
-            authors=authors,
-            narrators=narrators,
-            isbn=isbn,
-            series=raw_book.get("series", ""),
-            series_num=raw_book.get("series_num"),
-            cover_url=raw_book.get("cover_url", ""),
-            # pdf_extras is a list inside audiobook_info in the API response
-            pdf_extras=bool(audiobook_info.get("pdf_extras")) if audiobook_info else False,
-            publication_year=raw_book.get("publication_year"),
-            publication_month=raw_book.get("publication_month"),
-            publication_day=raw_book.get("publication_day"),
+        # 2. Authenticate
+        if verbose:
+            console.print("[dim]── auth ────────────────────────────────────────[/dim]")
+
+        client = LibroFmClient(
+            username=config.username,
+            password=config.password,
         )
 
         try:
-            reporter.start_download(book)
-            result = download_book(
-                book=book,
-                client=client,
-                output_base=config.output_dir,
-                history=history,
-                format_strategy=config.format,
-                config=config,
-                progress=reporter.update,
-            )
-            if result is None:
-                console.print(f"    [yellow]⏭ Skipped[/yellow]")
-                skipped += 1
-            else:
-                reporter.complete(book)
-                if verbose:
-                    console.print(f"    [dim]  {result.stat().st_size:,} bytes[/dim]")
-                downloaded += 1
+            client.authenticate()
+        except AuthError as exc:
+            console.print(f"[red]Authentication failed:[/red] {exc}")
+            return 1
+
+        if verbose:
+            console.print("  [green]✓[/green] authenticated")
+
+        # 3. Fetch library
+        if verbose:
+            console.print("[dim]── library ─────────────────────────────────────[/dim]")
+
+        try:
+            books = client.fetch_library()
         except Exception as exc:
-            reporter.fail(book, reason=str(exc))
+            console.print(f"[red]Failed to fetch library:[/red] {exc}")
+            return 1
+
+        if verbose:
+            console.print(f"  {len(books)} book(s) in library")
+
+        # 4. Filter already-downloaded
+        if verbose:
+            console.print("[dim]── filtering ───────────────────────────────────[/dim]")
+
+        history = DownloadHistory(history_path)
+        new_books = [b for b in books if not history.is_downloaded(b.get("isbn", ""))]
+        if limit:
+            new_books = new_books[:limit]
+
+        if verbose:
+            downloaded_count = len(books) - len(new_books)
+            console.print(f"  {downloaded_count} already downloaded, {len(new_books)} new")
+
+        if not new_books:
+            console.print("[green]All caught up! No new books to download.[/green]")
+            return 0
+
+        # 5. Download loop with TTY-aware reporting
+        reporter = DownloadReporter()
+        console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
+
+        downloaded = 0
+        skipped = 0
+        failed = 0
+        failed_books: list[tuple[Book, str]] = []
+        skipped_books: list[Book] = []
+
+        for raw_book in new_books:
+            title = raw_book.get("title", "Unknown")
+            isbn = raw_book.get("isbn", "?")
+            authors = raw_book.get("authors", [])
+            audiobook_info = raw_book.get("audiobook_info", {}) or {}
+            narrators = audiobook_info.get("narrators", []) or raw_book.get("narrators", [])
+
             if verbose:
-                import traceback
-                traceback.print_exc()
-            failed += 1
+                console.print(f"  ⬇ {title}  [dim]({isbn})[/dim]")
+                console.print(f"     authors:   {', '.join(authors) or '?'}")
+                console.print(f"     narrators: {', '.join(narrators) or '?'}")
 
+            book = Book(
+                title=title,
+                authors=authors,
+                narrators=narrators,
+                isbn=isbn,
+                series=raw_book.get("series", ""),
+                series_num=raw_book.get("series_num"),
+                cover_url=raw_book.get("cover_url", ""),
+                pdf_extras=bool(audiobook_info.get("pdf_extras")) if audiobook_info else False,
+                publication_year=raw_book.get("publication_year"),
+                publication_month=raw_book.get("publication_month"),
+                publication_day=raw_book.get("publication_day"),
+            )
 
-    reporter.summary(downloaded=downloaded, skipped=skipped, failed=failed)
+            try:
+                reporter.start_download(book)
+                result = download_book(
+                    book=book,
+                    client=client,
+                    output_base=config.output_dir,
+                    history=history,
+                    format_strategy=config.format,
+                    config=config,
+                    progress=reporter.update,
+                )
+                if result is None:
+                    console.print(f"    [yellow]⏭ Skipped[/yellow]")
+                    skipped += 1
+                    skipped_books.append(book)
+                else:
+                    reporter.complete(book)
+                    if verbose:
+                        console.print(f"    [dim]  {result.stat().st_size:,} bytes[/dim]")
+                    downloaded += 1
+            except Exception as exc:
+                reporter.fail(book, reason=str(exc))
+                if verbose:
+                    import traceback
+                    traceback.print_exc()
+                failed += 1
+                failed_books.append((book, str(exc)))
 
-    if verbose:
-        console.print("[dim]── done ────────────────────────────────────────[/dim]")
+        reporter.summary(
+            downloaded=downloaded,
+            skipped=skipped,
+            failed=failed,
+            failed_books=failed_books,
+            skipped_books=skipped_books,
+        )
 
-    return 0
+        if verbose:
+            console.print("[dim]── done ────────────────────────────────────────[/dim]")
+
+        return 0
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Download interrupted by user (Ctrl+C).[/yellow]")
+        return 130
 
 
 if __name__ == "__main__":

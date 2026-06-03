@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleanup, config toggle behavior, failure handling, and directory layout
   (134 total)
 
+- Enhanced summary: failed books listed with ISBN/title/reason, skipped
+  books listed with ISBN/title; both plain-text and rich/TTY reporters
+- Graceful Ctrl+C handling: clean shutdown message instead of traceback,
+  exit code 130 (standard Unix SIGINT convention)
+- 3 integration tests exercising full run() pipeline: happy path,
+  mixed result (download/skip/fail), fatal auth failure
+- 12 new tests covering enhanced summary formatting, exit code semantics,
+  graceful shutdown, and integration scenarios (168 total)
+
 ### Fixed
 - Library endpoint key mismatch: API returns "audiobooks" not "books"
 - M4B endpoint key mismatch: API returns "m4b_url" not "url"

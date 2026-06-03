@@ -7,7 +7,7 @@ import tempfile
 import pytest
 
 from librofm_downloader.downloader import Book
-from librofm_downloader.progress import DownloadReporter, PlainTextReporter
+from librofm_downloader.progress import DownloadReporter, PlainTextReporter, ProgressReporter
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +353,115 @@ class TestSummaryLine:
 
 
 # ---------------------------------------------------------------------------
+# Test 8b: Enhanced summary — failed/skipped book details (Issue #9)
+# ---------------------------------------------------------------------------
+
+
+class TestEnhancedSummaryFailedBooks:
+    """Summary lists each failed book with ISBN, title, and error reason."""
+
+    def test_summary_lists_failed_books_with_isbn_title_and_reason(self):
+        """When books fail, summary shows each one: ISBN, title, reason."""
+        fake_stdout = io.StringIO()
+        reporter = PlainTextReporter(stdout=fake_stdout)
+
+        book1 = Book(
+            title="Broken Book",
+            authors=["Some Author"],
+            narrators=["N"],
+            isbn="9789999999999",
+        )
+        book2 = Book(
+            title="Timeout Book",
+            authors=["Other Author"],
+            narrators=["N2"],
+            isbn="9788888888888",
+        )
+
+        reporter.summary(
+            downloaded=1,
+            skipped=0,
+            failed=2,
+            failed_books=[(book1, "HTTP 404"), (book2, "Connection timed out")],
+        )
+
+        output = fake_stdout.getvalue()
+        assert "Summary:" in output
+        assert "1 downloaded" in output
+        assert "2 failed" in output
+        # Each failed book listed with ISBN, title, reason
+        assert "9789999999999" in output
+        assert "Broken Book" in output
+        assert "HTTP 404" in output
+        assert "9788888888888" in output
+        assert "Timeout Book" in output
+        assert "Connection timed out" in output
+
+    def test_summary_no_failed_books_omits_section(self):
+        """When no books failed, no failed-book section appears."""
+        fake_stdout = io.StringIO()
+        reporter = PlainTextReporter(stdout=fake_stdout)
+
+        reporter.summary(
+            downloaded=3,
+            skipped=0,
+            failed=0,
+            failed_books=[],
+        )
+
+        output = fake_stdout.getvalue()
+        assert "3 downloaded" in output
+        assert "0 failed" in output
+        # No individual failure lines
+        assert "  ✗" not in output
+
+
+class TestEnhancedSummarySkippedBooks:
+    """Summary lists each skipped book with ISBN and title."""
+
+    def test_summary_lists_skipped_books_with_isbn_and_title(self):
+        """When books are skipped, summary shows each one: ISBN, title."""
+        fake_stdout = io.StringIO()
+        reporter = PlainTextReporter(stdout=fake_stdout)
+
+        book = Book(
+            title="No M4B Book",
+            authors=["Author X"],
+            narrators=["N"],
+            isbn="9787777777777",
+        )
+
+        reporter.summary(
+            downloaded=2,
+            skipped=1,
+            failed=0,
+            skipped_books=[book],
+        )
+
+        output = fake_stdout.getvalue()
+        assert "2 downloaded" in output
+        assert "1 skipped" in output
+        assert "9787777777777" in output
+        assert "No M4B Book" in output
+
+    def test_summary_no_skipped_books_omits_section(self):
+        """When no books skipped, no skipped-book section appears."""
+        fake_stdout = io.StringIO()
+        reporter = PlainTextReporter(stdout=fake_stdout)
+
+        reporter.summary(
+            downloaded=5,
+            skipped=0,
+            failed=0,
+            skipped_books=[],
+        )
+
+        output = fake_stdout.getvalue()
+        assert "5 downloaded" in output
+        assert "0 skipped" in output
+
+
+# ---------------------------------------------------------------------------
 # Test 9: Progress callback — download functions call back with bytes done
 # ---------------------------------------------------------------------------
 
@@ -608,3 +717,60 @@ class TestM4BReportsContentLength:
         totals_with_cl = [t for _, t in calls if t is not None]
         assert len(totals_with_cl) >= 1
         assert content_length in totals_with_cl
+
+
+# ---------------------------------------------------------------------------
+# Issue #9: Enhanced summary — ProgressReporter (rich/TTY) variants
+# ---------------------------------------------------------------------------
+
+
+class TestEnhancedSummaryProgressReporterFailed:
+    """ProgressReporter (TTY/rich) summary lists failed books with details."""
+
+    def test_rich_summary_lists_failed_books(self):
+        """TTY reporter's summary includes failed book ISBN, title, reason."""
+        from io import StringIO
+
+        fake_stdout = StringIO()
+        reporter = ProgressReporter(stdout=fake_stdout)
+
+        book = Book(
+            title="Rich Fail",
+            authors=["R Author"],
+            narrators=["N"],
+            isbn="9780000000099",
+        )
+
+        # Should not raise; ProgressReporter prints via rich Console
+        reporter.summary(
+            downloaded=0,
+            skipped=0,
+            failed=1,
+            failed_books=[(book, "HTTP 500")],
+        )
+
+
+class TestEnhancedSummaryProgressReporterSkipped:
+    """ProgressReporter (TTY/rich) summary lists skipped books."""
+
+    def test_rich_summary_lists_skipped_books(self):
+        """TTY reporter's summary includes skipped book ISBN and title."""
+        from io import StringIO
+
+        fake_stdout = StringIO()
+        reporter = ProgressReporter(stdout=fake_stdout)
+
+        book = Book(
+            title="Rich Skip",
+            authors=["S Author"],
+            narrators=["N"],
+            isbn="9780000000088",
+        )
+
+        # Should not raise; ProgressReporter prints via rich Console
+        reporter.summary(
+            downloaded=1,
+            skipped=1,
+            failed=0,
+            skipped_books=[book],
+        )

@@ -40,9 +40,37 @@ class PlainTextReporter:
     def update(self, completed: int, *, total: int | None = None) -> None:
         """No-op progress update — plain text mode has no progress bar."""
 
-    def summary(self, downloaded: int, skipped: int, failed: int) -> None:
-        """Print summary line."""
+    def summary(
+        self,
+        downloaded: int,
+        skipped: int,
+        failed: int,
+        *,
+        failed_books: list[tuple] | None = None,
+        skipped_books: list | None = None,
+    ) -> None:
+        """Print summary line with optional per-book details.
+
+        Args:
+            downloaded: Count of successfully downloaded books.
+            skipped: Count of skipped books.
+            failed: Count of failed books.
+            failed_books: List of (book, reason) tuples for each failure.
+            skipped_books: List of Book objects that were skipped.
+        """
         self._print(f"\nSummary: {downloaded} downloaded, {skipped} skipped, {failed} failed")
+
+        if failed_books:
+            self._print("  Failed:")
+            for book, reason in failed_books:
+                authors = ", ".join(book.authors) if book.authors else "Unknown"
+                self._print(f"    ✗ {authors} - {book.title} [{book.isbn}] ({reason})")
+
+        if skipped_books:
+            self._print("  Skipped:")
+            for book in skipped_books:
+                authors = ", ".join(book.authors) if book.authors else "Unknown"
+                self._print(f"    ⏭ {authors} - {book.title} [{book.isbn}]")
 
     def _print(self, message: str) -> None:
         self._out.write(message + "\n")
@@ -117,11 +145,31 @@ class ProgressReporter:
             self._console.print(f"  [red]✗[/red] {book.title}[dim] [{book.isbn}]{detail}[/dim]")
             self._current_task = None
 
-    def summary(self, downloaded: int, skipped: int, failed: int) -> None:
-        """Print summary line and stop progress."""
+    def summary(
+        self,
+        downloaded: int,
+        skipped: int,
+        failed: int,
+        *,
+        failed_books: list[tuple] | None = None,
+        skipped_books: list | None = None,
+    ) -> None:
+        """Print summary line with optional per-book details and stop progress."""
         if self._progress:
             self._progress.stop()
         self._console.print(f"\n[bold]Summary:[/bold] {downloaded} downloaded, {skipped} skipped, {failed} failed")
+
+        if failed_books:
+            self._console.print("  [red]Failed:[/red]")
+            for book, reason in failed_books:
+                authors = ", ".join(book.authors) if book.authors else "Unknown"
+                self._console.print(f"    ✗ {authors} - {book.title} [{book.isbn}] ({reason})")
+
+        if skipped_books:
+            self._console.print("  [yellow]Skipped:[/yellow]")
+            for book in skipped_books:
+                authors = ", ".join(book.authors) if book.authors else "Unknown"
+                self._console.print(f"    ⏭ {authors} - {book.title} [{book.isbn}]")
 
 
 def _fmt_size(bytes_val: int) -> str:
