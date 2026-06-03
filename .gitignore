@@ -131,3 +131,5 @@ download_history.json
 .pi/extensions/guardrails.json
 
 .pi/improvements.db
+
+audiobooks/
