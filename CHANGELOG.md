@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **cli:** Remove redundant per-book verbose print in parallel download loop.
+  Progress bars already show author+title; the extra `⬇ title`/authors/narrators
+  block caused a triple-display (bars → details → live progress). 247 tests pass.
 - **cli:** Extract `main()` so argparse runs for installed console script.
   `-v`/`--verbose` was dead because the entry point called `run()`
   directly, bypassing the `if __name__ == "__main__"` argparse block.

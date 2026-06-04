@@ -146,10 +146,6 @@ def run(
         def _make_download_fn():
             """Closure capturing client, config, history, reporter for each book."""
             def _download_fn(book: Book):
-                if verbose:
-                    console.print(f"  ⬇ {book.title}  [dim]({book.isbn})[/dim]")
-                    console.print(f"     authors:   {', '.join(book.authors) or '?'}")
-                    console.print(f"     narrators: {', '.join(book.narrators) or '?'}")
                 return download_book(
                     book=book,
                     client=client,
