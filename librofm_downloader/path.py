@@ -3,6 +3,8 @@
 Pure logic module — no I/O, no network. All deterministic string manipulation.
 """
 
+from dataclasses import dataclass
+
 import re
 from pathlib import Path
 
@@ -129,6 +131,21 @@ def needs_subdirectory(book: Book) -> bool:
     return bool(book.pdf_extras)
 
 
+@dataclass(frozen=True)
+class OutputPlan:
+    """Resolved output paths and flags for one Book.
+
+    Immutable snapshot of where every output file for a book should go.
+    Computed once by :func:`resolve_output_plan`, then consumed by download
+    functions so that no path computation happens inside downloaders.
+    """
+
+    audio_path: Path          # Complete file path for audio (.m4b)
+    partial_path: Path        # .partial resume path for audio
+    cover_path: Path | None   # None when disabled or no cover_url
+    pdf_path: Path | None     # None when disabled or no pdf_extras
+
+
 def _resolve_output_dir(
     book: Book,
     output_base: Path | str,
@@ -156,3 +173,50 @@ def _resolve_output_dir(
 
     # Flat: file is leaf node under author dir
     return base / first_author
+
+
+def resolve_output_plan(
+    book: Book,
+    output_base: Path | str,
+    config: "Config | None" = None,
+) -> OutputPlan:
+    """Resolve all output paths for a book into a single immutable plan.
+
+    Centralizes every path computation so download functions receive
+    pre-resolved Paths instead of computing them inline.
+
+    Args:
+        book: The book metadata.
+        output_base: Base download directory (string or Path).
+        config: Config with download_covers / download_extras toggles.
+                When None, cover_path and pdf_path are both None.
+
+    Returns:
+        Frozen OutputPlan with all resolved file paths.
+    """
+    from urllib.parse import urlparse as _urlparse
+
+    output_dir = _resolve_output_dir(book, output_base, config=config)
+
+    title_sanitized = sanitize(book.title)
+    audio_path = output_dir / f"{title_sanitized}.m4b"
+    partial_path = Path(str(audio_path) + ".partial")
+
+    # Cover path: only when config provided AND enabled AND cover_url is present
+    cover_path: Path | None = None
+    if config is not None and config.download_covers and book.cover_url:
+        parsed = _urlparse(book.cover_url)
+        name = Path(parsed.path).name or "cover.jpg"
+        cover_path = output_dir / sanitize(name)
+
+    # PDF path: only when enabled AND pdf_extras is truthy
+    pdf_path: Path | None = None
+    if config is not None and config.download_extras and book.pdf_extras:
+        pdf_path = output_dir / "map.pdf"
+
+    return OutputPlan(
+        audio_path=audio_path,
+        partial_path=partial_path,
+        cover_path=cover_path,
+        pdf_path=pdf_path,
+    )

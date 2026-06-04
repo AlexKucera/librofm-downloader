@@ -12,6 +12,8 @@ from librofm_downloader.path import (
     resolve_path,
     needs_subdirectory,
     _resolve_output_dir,
+    OutputPlan,
+    resolve_output_plan,
 )
 from librofm_downloader.downloader import (
     download_m4b,
@@ -1325,10 +1327,12 @@ class TestDownloadAccompanyingFiles:
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
             )
 
-            download_accompanying_files(book, output_dir, config, transport=transport)
+            plan = resolve_output_plan(book, output_dir, config=config)
+            download_accompanying_files(book, plan, config, transport=transport)
 
-            # Cover file exists in output directory
-            cover_path = output_dir / "cover.jpg"
+            # Cover file exists at plan.resolved location
+            cover_path = plan.cover_path
+            assert cover_path is not None
             assert cover_path.exists()
             assert cover_path.read_bytes() == cover_payload
 
@@ -1365,10 +1369,12 @@ class TestDownloadAccompanyingFiles:
             mock_client = unittest.mock.MagicMock()
             mock_client.fetch_pdf_extra_url.return_value = "https://cdn.example.com/map.pdf"
 
-            downloaded = download_accompanying_files(book, output_dir, config, client=mock_client, transport=transport)
+            plan = resolve_output_plan(book, output_dir, config=config)
+            downloaded = download_accompanying_files(book, plan, config, client=mock_client, transport=transport)
 
-            # PDF file exists in output directory
-            pdf_path = output_dir / "map.pdf"
+            # PDF file exists at plan.resolved location
+            pdf_path = plan.pdf_path
+            assert pdf_path is not None
             assert pdf_path.exists()
             assert pdf_path.read_bytes() == pdf_payload
 
@@ -1401,14 +1407,16 @@ class TestDownloadAccompanyingFiles:
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
             )
 
-            download_accompanying_files(book, output_dir, config, transport=transport)
+            plan = resolve_output_plan(book, output_dir, config=config)
+            download_accompanying_files(book, plan, config, transport=transport)
 
-            # Final file exists
-            final_path = output_dir / "cover.jpg"
+            # Final file exists at plan.resolved location
+            final_path = plan.cover_path
+            assert final_path is not None
             assert final_path.exists()
 
             # No .partial file left behind
-            partial_path = output_dir / "cover.jpg.partial"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
             assert not partial_path.exists()
 
     def test_download_extras_false_skips_pdf(self):
@@ -1434,7 +1442,8 @@ class TestDownloadAccompanyingFiles:
                 output_dir=str(tmpdir), download_extras=False, download_covers=True,
             )
 
-            downloaded = download_accompanying_files(book, output_dir, config, client=mock_client)
+            plan = resolve_output_plan(book, output_dir, config=config)
+            downloaded = download_accompanying_files(book, plan, config, client=mock_client)
 
             # No files downloaded (no cover URL either)
             assert len(downloaded) == 0
@@ -1462,7 +1471,8 @@ class TestDownloadAccompanyingFiles:
                 output_dir=str(tmpdir), download_extras=True, download_covers=False,
             )
 
-            downloaded = download_accompanying_files(book, output_dir, config)
+            plan = resolve_output_plan(book, output_dir, config=config)
+            downloaded = download_accompanying_files(book, plan, config)
 
             # No files downloaded (no PDF extras either)
             assert len(downloaded) == 0
@@ -1497,7 +1507,8 @@ class TestDownloadAccompanyingFiles:
             )
 
             # Should NOT raise — failure is non-critical
-            result = download_accompanying_files(book, output_dir, config, transport=transport)
+            plan = resolve_output_plan(book, output_dir, config=config)
+            result = download_accompanying_files(book, plan, config, transport=transport)
 
             # Returns empty list (nothing downloaded)
             assert result == []
@@ -1682,7 +1693,8 @@ class TestOutputStructure:
             )
 
             # Should NOT raise — failure is non-critical
-            result = download_accompanying_files(book, output_dir, config, client=mock_client)
+            plan = resolve_output_plan(book, output_dir, config=config)
+            result = download_accompanying_files(book, plan, config, client=mock_client)
 
             # Returns empty list (nothing downloaded)
             assert result == []

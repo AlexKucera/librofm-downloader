@@ -8,8 +8,10 @@ import pytest
 
 from librofm_downloader.book import Book
 from librofm_downloader.path import (
+    OutputPlan,
     needs_subdirectory,
     _resolve_output_dir,
+    resolve_output_plan,
     resolve_path,
     sanitize,
 )
@@ -569,3 +571,246 @@ class TestResolveOutputDir:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = _resolve_output_dir(book, tmpdir)
             assert output_dir == Path(tmpdir) / "Author Name"
+
+
+# ---------------------------------------------------------------------------
+# OutputPlan resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveOutputPlan:
+    """OutputPlan frozen dataclass and resolve_output_plan() function."""
+
+    def test_happy_path_all_enabled(self):
+        """Default pattern with all flags enabled produces all 4 paths."""
+        from librofm_downloader.config import Config
+        from librofm_downloader.path import OutputPlan, resolve_output_plan
+
+        book = Book(
+            title="The Final Empire",
+            authors=["Brandon Sanderson"],
+            narrators=["Michael Kramer"],
+            isbn="9780765374991",
+            series="Mistborn",
+            series_num=1,
+            cover_url="https://covers.libro.fm/cover.jpg",
+            pdf_extras=True,
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=True, download_extras=True,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+
+        # OutputPlan is a frozen dataclass with expected fields
+        assert isinstance(plan, OutputPlan)
+
+        # Audio path: sanitized title + .m4b extension
+        assert plan.audio_path.name == "The Final Empire.m4b"
+        assert plan.audio_path.suffix == ".m4b"
+
+        # Partial path is audio_path + ".partial"
+        assert str(plan.partial_path) == f"{str(plan.audio_path)}.partial"
+
+        # Cover path populated (covers enabled + cover_url present)
+        assert plan.cover_path is not None
+        assert plan.cover_path.name == "cover.jpg"
+
+        # PDF path populated (extras enabled + pdf_extras True)
+        assert plan.pdf_path is not None
+        assert plan.pdf_path.name == "map.pdf"
+
+        # All file paths share the same parent directory (resolved output dir)
+        assert plan.audio_path.parent == plan.cover_path.parent
+        assert plan.audio_path.parent == plan.pdf_path.parent
+
+        # Subdirectory layout because pdf_extras=True
+        assert plan.audio_path.is_relative_to(Path("/audiobooks"))
+
+    def test_custom_output_pattern(self):
+        """Custom pattern overrides default path structure."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="The Final Empire",
+            authors=["Brandon Sanderson"],
+            narrators=["Michael Kramer"],
+            isbn="9780765374991",
+            series="Mistborn",
+            series_num=1,
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=False, download_extras=False,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+
+        # Audio path should exist even without extras
+        assert plan.audio_path.name == "The Final Empire.m4b"
+        # Flat layout (no extras) → under author directory
+        assert "Brandon" in str(plan.audio_path)
+
+    def test_cover_disabled_returns_none(self):
+        """download_covers=False → cover_path is None regardless of cover_url."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="No Cover Book",
+            authors=["Author"],
+            narrators=["Nar"],
+            isbn="9780000000001",
+            cover_url="https://covers.libro.fm/cover.jpg",
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=False, download_extras=False,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+        assert plan.cover_path is None
+
+    def test_pdf_disabled_returns_none(self):
+        """download_extras=False → pdf_path is None regardless of pdf_extras."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="No PDF Book",
+            authors=["Author"],
+            narrators=["Nar"],
+            isbn="9780000000002",
+            pdf_extras=True,
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=False, download_extras=False,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+        assert plan.pdf_path is None
+
+    def test_no_cover_url_returns_none(self):
+        """Empty cover_url → cover_path is None even with download_covers=True."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="No URL Book",
+            authors=["Author"],
+            narrators=["Nar"],
+            isbn="9780000000003",
+            cover_url="",  # empty string = no cover available
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=True, download_extras=False,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+        assert plan.cover_path is None
+
+    def test_no_pdf_extras_returns_none(self):
+        """pdf_extras=False → pdf_path is None even with download_extras=True."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="No Extras Book",
+            authors=["Author"],
+            narrators=["Nar"],
+            isbn="9780000000004",
+            pdf_extras=False,
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=False, download_extras=True,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+        assert plan.pdf_path is None
+
+    def test_string_output_base_accepted(self):
+        """String output_base works (converted to Path internally)."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="String Base Book",
+            authors=["Author"],
+            narrators=["Nar"],
+            isbn="9780000000005",
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=False, download_extras=False,
+        )
+
+        # Should not raise; should return a plan with absolute paths
+        plan = resolve_output_plan(book, "/some/string/base", config)
+        assert isinstance(plan.audio_path, Path)
+        assert plan.audio_path.is_absolute()
+
+    def test_subdirectory_layout_when_pdf_extras_true(self):
+        """pdf_extras=True creates subdirectory layout (Author/Title/)."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="Subdir Layout",
+            authors=["Author Name"],
+            narrators=["Nar"],
+            isbn="9780000000006",
+            pdf_extras=True,
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=True, download_extras=True,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+
+        # Should be /audiobooks/Author Name/Subdir Layout/The Final Empire.m4b
+        expected_parent = Path("/audiobooks") / "Author Name" / "Subdir Layout"
+        assert plan.audio_path.parent == expected_parent
+
+    def test_flat_layout_when_no_extras(self):
+        """No extras + no cover → flat layout (audio file under author dir)."""
+        from librofm_downloader.config import Config
+
+        book = Book(
+            title="Flat Layout",
+            authors=["Author Name"],
+            narrators=["Nar"],
+            isbn="9780000000007",
+        )
+
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=False, download_extras=False,
+        )
+
+        plan = resolve_output_plan(book, "/audiobooks", config)
+
+        # Flat: audio is leaf under author dir
+        expected_parent = Path("/audiobooks") / "Author Name"
+        assert plan.audio_path.parent == expected_parent
+
+    def test_output_plan_is_frozen(self):
+        """OutputPlan is immutable (frozen dataclass)."""
+        from dataclasses import FrozenInstanceError
+        from librofm_downloader.config import Config
+
+        book = Book(title="Test", authors=["A"], narrators=["N"], isbn="9780000000008")
+        config = Config(
+            username="u", password="p", format="m4b_mp3_fallback",
+            output_dir="/tmp", download_covers=False, download_extras=False,
+        )
+        plan = resolve_output_plan(book, "/base", config)
+
+        with pytest.raises(FrozenInstanceError):
+            plan.audio_path = Path("/other")  # type: ignore[misc]

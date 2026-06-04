@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a deprecated re-export shim. Endpoint signatures slimmed from 4-5 params
   to ≤3 (transport removed). 227 tests pass (+17 new). Closes #27.
 
+- **path:** Introduce OutputPlan frozen dataclass and resolve_output_plan()
+  function to centralize all path computation for a book. Download functions
+  now consume pre-resolved plan fields instead of computing paths inline,
+  eliminating duplicated audio-filename logic. 237 tests pass (+10 new).
+  Closes #28.
 
 10:9bb|### Fixed
 - **progress:** Wire task_id through parallel progress callback.

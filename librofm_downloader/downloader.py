@@ -17,6 +17,7 @@ from librofm_downloader.history import HistoryEntry
 from librofm_downloader.path import (
     _resolve_output_dir,
     needs_subdirectory,
+    resolve_output_plan,
     resolve_path,
     sanitize,
 )
@@ -240,7 +241,8 @@ def download_book(
     """
     from datetime import datetime, timezone
 
-    output_dir = _resolve_output_dir(book, output_base, config=config)
+    plan = resolve_output_plan(book, output_base, config=config)
+    output_dir = plan.audio_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---
@@ -248,12 +250,10 @@ def download_book(
         # Try M4B first
         try:
             m4b_url = client.fetch_m4b_url(book.isbn)
-            title_sanitized = sanitize(book.title)
-            m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
+            result = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
             _write_history(history, book, "m4b", str(result))
             if config:
-                download_accompanying_files(book, output_dir, config, client=client, transport=transport)
+                download_accompanying_files(book, plan, config, client=client, transport=transport)
             return result
         except M4BUnavailableError:
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
@@ -261,26 +261,24 @@ def download_book(
         # Fall back to MP3
         result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
         if result and config:
-            download_accompanying_files(book, output_dir, config, client=client, transport=transport)
+            download_accompanying_files(book, plan, config, client=client, transport=transport)
         return result
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
         result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
         if result and config:
-            download_accompanying_files(book, output_dir, config, client=client, transport=transport)
+            download_accompanying_files(book, plan, config, client=client, transport=transport)
         return result
 
     # --- m4b_only: skip book if M4B unavailable ---
     if format_strategy == "m4b_only":
         try:
             m4b_url = client.fetch_m4b_url(book.isbn)
-            title_sanitized = sanitize(book.title)
-            m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
+            result = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
             _write_history(history, book, "m4b", str(result))
             if config:
-                download_accompanying_files(book, output_dir, config, client=client, transport=transport)
+                download_accompanying_files(book, plan, config, client=client, transport=transport)
             return result
         except M4BUnavailableError:
             logger.info("Skipping %s (%s): no M4B available (m4b_only mode)", book.title, book.isbn)
@@ -342,6 +340,7 @@ def _cover_filename_from_url(url: str) -> str:
 def _download_cover(
     url: str,
     output_dir: Path,
+    expected_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> Path | None:
     """Download a cover art file via streaming .partial → atomic rename.
@@ -353,13 +352,15 @@ def _download_cover(
     """
     from librofm_downloader.session import LibroFmSession
 
-    filename = _cover_filename_from_url(url)
+    if expected_path is not None:
+        output_path = expected_path
+    else:
+        filename = _cover_filename_from_url(url)
+        output_path = output_dir / filename
 
     # Normalize protocol-relative URLs (//covers.libro.fm/... → https://covers.libro.fm/...)
     if url.startswith("//"):
         url = "https:" + url
-
-    output_path = output_dir / filename
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
@@ -390,14 +391,18 @@ def _download_pdf(
     url: str,
     filename: str,
     output_dir: Path,
+    expected_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> Path | None:
     """Download a PDF extra file via streaming .partial → atomic rename.
 
     Returns Path on success, None on failure (logs warning).
     """
-    safe_name = sanitize(filename)
-    output_path = output_dir / safe_name
+    if expected_path is not None:
+        output_path = expected_path
+    else:
+        safe_name = sanitize(filename)
+        output_path = output_dir / safe_name
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
@@ -421,7 +426,7 @@ def _download_pdf(
 
 def download_accompanying_files(
     book: Book,
-    output_dir: Path | str,
+    plan: "OutputPlan",
     config: "Config",
     client: "LibroFmSession | None" = None,
     transport: httpx.BaseTransport | None = None,
@@ -433,7 +438,7 @@ def download_accompanying_files(
 
     Args:
         book: The book metadata.
-        output_dir: Directory where accompanying files are placed.
+        plan: OutputPlan with resolved paths for cover/PDF files.
         config: Config with download_extras / download_covers toggles.
         client: Optional LibroFmSession for fetching PDF URLs.
         transport: Optional httpx transport override for testing.
@@ -441,14 +446,15 @@ def download_accompanying_files(
     Returns:
         List of Paths successfully downloaded.
     """
+    from librofm_downloader.path import OutputPlan
     from librofm_downloader.session import LibroFmSession
 
-    output_dir = Path(output_dir)
+    output_dir = plan.audio_path.parent
     downloaded: list[Path] = []
 
     # Download cover art if enabled and available
     if config.download_covers and book.cover_url:
-        result = _download_cover(book.cover_url, output_dir, transport=transport)
+        result = _download_cover(book.cover_url, output_dir, expected_path=plan.cover_path, transport=transport)
         if result:
             downloaded.append(result)
 
@@ -457,7 +463,7 @@ def download_accompanying_files(
         try:
             pdf_url = client.fetch_pdf_extra_url(book.isbn, "map.pdf")
             if pdf_url:
-                result = _download_pdf(pdf_url, "map.pdf", output_dir, transport=transport)
+                result = _download_pdf(pdf_url, "map.pdf", output_dir, expected_path=plan.pdf_path, transport=transport)
                 if result:
                     downloaded.append(result)
         except Exception as exc:
