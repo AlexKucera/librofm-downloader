@@ -3,3 +3,4 @@ librofm:
   output_dir: /tmp/books
   download_extras: false
   download_covers: false
+  workers: 5

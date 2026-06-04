@@ -1480,7 +1480,7 @@ Run again — the failed book will be retried (it wasn't recorded in history sin
 <li>Whether a VPN/proxy is adding latency</li>
 <li>Libro.fm CDN responsiveness (varies by region)</li>
 </ol>
-<p>The tool downloads in a <strong>single stream per book</strong> (no parallelism within one book), but processes books sequentially. There is no built-in rate limiting or parallel download feature.</p>
+<p>The tool downloads in a <strong>single stream per book</strong> (no parallelism within one book), but can process <strong>multiple books in parallel</strong> via <code>--workers N</code> (default 3). Libro.fm API calls are rate-limited to 3 concurrent requests regardless of worker count.</p>
 <h3 id="large-library-takes-a-long-time">Large library takes a long time</h3>
 <p>Audiobooks are large (200 MB – 1 GB each). A library of 50 books at 2 MB/s would take ~7 hours just for transfer time. This is expected behavior.</p>
 <p>Use <code>--limit</code> to process smaller batches:</p>

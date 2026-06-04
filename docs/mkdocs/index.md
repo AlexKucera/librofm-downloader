@@ -5,7 +5,7 @@
 
 **Download owned audiobooks from your Libro.fm account** — a lightweight, dependency-minimal CLI tool written in Python.
 
-No Docker. No JVM. Just `pip install` and go.
+No Docker. No JVM. Just Python and go.
 
 ## Features
 
@@ -21,8 +21,12 @@ No Docker. No JVM. Just `pip install` and go.
 ## Quick Start
 
 ```bash
-# 1. Install
-pip install librofm-downloader
+# 1. Install from source
+git clone https://github.com/AlexKucera/librofm-downloader.git
+cd librofm-downloader
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -e .
 
 # 2. Configure
 cat > config.yaml << 'EOF'

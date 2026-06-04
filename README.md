@@ -5,7 +5,7 @@
 
 **Download owned audiobooks from your Libro.fm account** — a lightweight, dependency-minimal CLI tool written in Python.
 
-No Docker. No JVM. Just `pip install` and go.
+No Docker. No JVM. Just Python and go.
 
 ## Features
 
@@ -17,12 +17,17 @@ No Docker. No JVM. Just `pip install` and go.
 - **TTY-aware progress** — rich progress bars in your terminal, clean log lines in cron jobs
 - **Download history** — tracks what's been downloaded so re-runs only fetch new books
 - **Graceful failure isolation** — one failed book doesn't stop the rest
+- **Parallel downloads** — `ThreadPoolExecutor` downloads multiple books simultaneously; configurable via `--workers N` (default 3)
 
 ## Quick Start
 
 ```bash
-# 1. Install
-pip install librofm-downloader
+# 1. Install from source
+git clone https://github.com/AlexKucera/librofm-downloader.git
+cd librofm-downloader
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -e .
 
 # 2. Create XDG config directory
 mkdir -p ~/.config/librofm-downloader
@@ -42,8 +47,10 @@ librofm:
   password: your-password
 EOF
 
-# 4. Run
-librofm-downloader
+# 3. Run
+librofm-downloader            # default: 3 parallel workers
+librofm-downloader -w 5      # 5 parallel workers
+librofm-downloader --workers 1  # sequential (1 worker)
 ```
 
 ## Documentation
@@ -76,7 +83,7 @@ Output paths follow a sensible default (`Author/Series/Book N Title` for series,
 
 ## Comparison
 
-This project is a **lightweight Python alternative** to the [Kotlin-based Docker container](https://github.com/advplyr/librofm-audiobook-downloader) that runs a full JVM. If you want something you can `pip install`, debug with standard Python tooling, and run without Docker — this is it.
+This project is a **lightweight Python alternative** to the [Kotlin-based Docker container](https://github.com/advplyr/librofm-audiobook-downloader) that runs a full JVM. If you want something you can debug with standard Python tooling and run without Docker — this is it.
 
 ## License
 

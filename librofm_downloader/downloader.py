@@ -4,6 +4,17 @@ Pure logic module — no I/O, no network. All deterministic string manipulation.
 """
 
 import logging
+import threading
+
+
+class InterruptedDownload(Exception):
+    """Raised when a download is cancelled mid-stream via cancel_event.
+
+    Signals that the user pressed Ctrl+C and the download loop detected
+    the cancellation signal between chunks. Distinct from KeyboardInterrupt so
+    callers can distinguish "user hit Ctrl+C" from "download was cancelled
+    cooperatively during drain."
+    """
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,6 +196,7 @@ def download_zip_part(
     output_dir: Path | str,
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
 ) -> list[Path]:
     """Download a single ZIP part and extract its contents.
 
@@ -223,38 +235,44 @@ def download_zip_part(
     client = httpx.Client(transport=transport, follow_redirects=True)
     mode = "ab" if resume_from > 0 else "wb"
 
-    with client.stream("GET", url, headers=headers) as resp:
-        resp.raise_for_status()
-        with open(partial_path, mode) as f:
-            downloaded = resume_from
-            content_length: int | None = None
-            for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if progress:
-                    if content_length is None:
-                        cl_header = resp.headers.get("content-length")
-                        if cl_header:
-                            content_length = int(cl_header)
-                        progress(downloaded, total=content_length)
-                    else:
-                        progress(downloaded)
+    try:
+        with client.stream("GET", url, headers=headers) as resp:
+            resp.raise_for_status()
+            with open(partial_path, mode) as f:
+                downloaded = resume_from
+                content_length: int | None = None
+                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedDownload("Download cancelled by user")
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress:
+                        if content_length is None:
+                            cl_header = resp.headers.get("content-length")
+                            if cl_header:
+                                content_length = int(cl_header)
+                            progress(downloaded, total=content_length)
+                        else:
+                            progress(downloaded)
 
-    # Atomic rename from .partial to .zip
-    partial_path.rename(zip_path)
+        # Atomic rename from .partial to .zip
+        partial_path.rename(zip_path)
 
-    # Extract all files from ZIP into output_dir
-    extracted: list[Path] = []
-    with _zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(output_dir)
-                for name in zf.namelist():
-                    extracted.append(output_dir / name)
+        # Extract all files from ZIP into output_dir
+        extracted: list[Path] = []
+        with _zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(output_dir)
+                    for name in zf.namelist():
+                        extracted.append(output_dir / name)
 
-    # Clean up ZIP file after extraction
-    zip_path.unlink(missing_ok=True)
+        # Clean up ZIP file after extraction
+        zip_path.unlink(missing_ok=True)
 
-    logger.info("Downloaded & extracted %s → %d file(s) in %s", url, len(extracted), output_dir)
-    return extracted
+        logger.info("Downloaded & extracted %s → %d file(s) in %s", url, len(extracted), output_dir)
+        return extracted
+    except InterruptedDownload:
+        # Skip post-processing on cancellation — partial file stays as .partial
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +285,7 @@ def download_m4b(
     output_path: Path | str,
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
 ) -> Path:
     """Download an M4B file via streaming chunks.
 
@@ -301,29 +320,34 @@ def download_m4b(
 
     mode = "ab" if resume_from > 0 else "wb"
 
-    with client.stream("GET", url, headers=headers) as resp:
-        resp.raise_for_status()
+    try:
+        with client.stream("GET", url, headers=headers) as resp:
+            resp.raise_for_status()
 
-        with open(partial_path, mode) as f:
-            downloaded = resume_from
-            content_length: int | None = None
-            for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if progress:
-                    if content_length is None:
-                        cl_header = resp.headers.get("content-length")
-                        if cl_header:
-                            content_length = int(cl_header)
-                        progress(downloaded, total=content_length)
-                    else:
-                        progress(downloaded)
+            with open(partial_path, mode) as f:
+                downloaded = resume_from
+                content_length: int | None = None
+                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedDownload("Download cancelled by user")
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress:
+                        if content_length is None:
+                            cl_header = resp.headers.get("content-length")
+                            if cl_header:
+                                content_length = int(cl_header)
+                            progress(downloaded, total=content_length)
+                        else:
+                            progress(downloaded)
 
-    # Atomic rename from .partial to final filename
-    partial_path.rename(output_path)
+        # Atomic rename from .partial to final filename
+        partial_path.rename(output_path)
 
-    logger.info("Downloaded %s → %s", url, output_path)
-    return output_path
+        logger.info("Downloaded %s → %s", url, output_path)
+        return output_path
+    except InterruptedDownload:
+        raise
 
 
 def _resolve_output_dir(
@@ -364,6 +388,7 @@ def download_book(
     config: "Config | None" = None,
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
 ) -> Path | None:
     """Orchestrate a single book download with format strategy.
 
@@ -391,7 +416,7 @@ def download_book(
             m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
             title_sanitized = sanitize(book.title)
             m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress)
+            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
             _write_history(history, book, "m4b", str(result))
             if config:
                 download_accompanying_files(book, output_dir, config, client=client, transport=transport)
@@ -400,14 +425,14 @@ def download_book(
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
         # Fall back to MP3
-        result = _download_mp3(book, client, output_dir, history, transport)
+        result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
         if result and config:
             download_accompanying_files(book, output_dir, config, client=client, transport=transport)
         return result
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
-        result = _download_mp3(book, client, output_dir, history, transport)
+        result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
         if result and config:
             download_accompanying_files(book, output_dir, config, client=client, transport=transport)
         return result
@@ -418,7 +443,7 @@ def download_book(
             m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
             title_sanitized = sanitize(book.title)
             m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress)
+            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
             _write_history(history, book, "m4b", str(result))
             if config:
                 download_accompanying_files(book, output_dir, config, client=client, transport=transport)
@@ -437,6 +462,7 @@ def _download_mp3(
     history: "DownloadHistory",
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
 ) -> Path | None:
     """Fetch MP3 manifest and download all ZIP parts."""
     try:
@@ -453,7 +479,7 @@ def _download_mp3(
     all_extracted: list[Path] = []
     for part in parts:
         part_url = part["url"]
-        extracted = download_zip_part(part_url, output_dir, transport=transport, progress=progress)
+        extracted = download_zip_part(part_url, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         all_extracted.extend(extracted)
 
     # Record first extracted file as representative path

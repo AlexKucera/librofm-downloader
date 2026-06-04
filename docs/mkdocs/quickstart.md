@@ -4,10 +4,14 @@ Get librofm-downloader installed, configured, and running in three steps.
 
 ## 1. Install
 
-### From PyPI (recommended)
+### From source
 
 ```bash
-pip install librofm-downloader
+git clone https://github.com/AlexKucera/librofm-downloader.git
+cd librofm-downloader
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -e .
 ```
 
 Requires **Python 3.11+**.
@@ -88,7 +92,8 @@ This:
 3. Fetches your full library (all pages)
 4. Skips books already in `download_history.json` (XDG → CWD search)
 5. Downloads each new book with a progress bar
-6. Records successful downloads to history
+6. Downloads each new book (3 parallel workers by default) with a progress bar
+7. Records successful downloads to history
 
 ### First run output (TTY)
 

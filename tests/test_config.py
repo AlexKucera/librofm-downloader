@@ -16,6 +16,7 @@ from librofm_downloader.config import (
     CredentialsInConfigError,
     MissingFieldError,
     InvalidFormatError,
+    InvalidWorkersError,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -171,6 +172,50 @@ class TestDefaults:
             secrets_path=FIXTURES / "secrets_only_creds.yaml",
         )
         assert config.download_covers is True
+
+
+class TestWorkersDefault:
+    """workers field defaults to 3 when not specified in YAML."""
+
+    def test_default_workers_is_3(self):
+        """When workers is absent from YAML, Config.workers defaults to 3."""
+        config = load_config(
+            config_path=FIXTURES / "config_minimal.yaml",
+            secrets_path=FIXTURES / "secrets_only_creds.yaml",
+        )
+        assert config.workers == 3
+
+
+class TestWorkersFromYaml:
+    """workers field is parsed from config.yaml when present."""
+
+    def test_workers_5_from_yaml(self):
+        """workers: 5 in config.yaml produces Config(workers=5)."""
+        config = load_config(
+            config_path=FIXTURES / "config_with_overrides.yaml",
+            secrets_path=FIXTURES / "secrets_only_creds.yaml",
+        )
+        assert config.workers == 5
+
+
+class TestWorkersValidation:
+    """workers < 1 raises InvalidWorkersError."""
+
+    def test_workers_zero_raises_error(self):
+        """workers: 0 in YAML raises InvalidWorkersError."""
+        with pytest.raises(InvalidWorkersError, match="Must be an integer >= 1"):
+            load_config(
+                config_path=FIXTURES / "config_workers_zero.yaml",
+                secrets_path=FIXTURES / "secrets_only_creds.yaml",
+            )
+
+    def test_workers_negative_raises_error(self):
+        """workers: -1 in YAML raises InvalidWorkersError."""
+        with pytest.raises(InvalidWorkersError, match="Must be an integer >= 1"):
+            load_config(
+                config_path=FIXTURES / "config_workers_negative.yaml",
+                secrets_path=FIXTURES / "secrets_only_creds.yaml",
+            )
 
 
 class TestInvalidFormat:

@@ -1144,6 +1144,12 @@ If either field is missing, the tool exits with code <strong>1</strong> and an e
 <td><code>true</code></td>
 <td>Download cover art (JPEG/PNG) when available.</td>
 </tr>
+<tr>
+<td><code>workers</code></td>
+<td><code>integer</code></td>
+<td><code>3</code></td>
+<td>Number of parallel download threads. Set to 1 for sequential mode. Must be ≥ 1.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="full-example">Full example</h3>
@@ -1152,11 +1158,13 @@ If either field is missing, the tool exits with code <strong>1</strong> and an e
 </span><span id="__span_0__-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./audiobooks</span>
 </span><span id="__span_0__-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">download_extras</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </span><span id="__span_0__-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">download_covers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span_0__-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
 </span></code></pre></div>
 <h3 id="minimal-example">Minimal example</h3>
 <p>Only <code>format</code> is meaningful here — everything else has a default:</p>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span_0__-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">librofm</span><span class="p">:</span>
 </span><span id="__span_0__-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mp3_only</span>
+</span><span id="__span_0__-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">          </span><span class="c1"># high-bandwidth connection</span>
 </span></code></pre></div>
 <h2 id="how-merging-works">How merging works</h2>
 <p><code>config.yaml</code> and <code>secrets.yaml</code> are <strong>deep-merged</strong> at startup:</p>
@@ -1203,6 +1211,11 @@ If either field is missing, the tool exits with code <strong>1</strong> and an e
 <td><code>Missing secrets.yaml. Searched: ~/.config/.../secrets.yaml → ./secrets.yaml.</code></td>
 <td>No secrets file in either location</td>
 <td>Create <code>secrets.yaml</code> with your credentials in one of the searched locations.</td>
+</tr>
+<tr>
+<td><code>Invalid workers value: 0</code></td>
+<td>Workers &lt; 1</td>
+<td>Set <code>workers</code> to an integer ≥ 1</td>
 </tr>
 </tbody>
 </table>

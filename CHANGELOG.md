@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **progress:** Wire task_id through parallel progress callback.
+  All concurrent download updates went to the same (most recently started) bar
+  because `task_id` was never threaded from `start_download()` to `update()`.
+  Create per-book closure in orchestrator that binds `task_id`, pass through
+  `cli._download_fn` as optional kwarg. 3 new regression tests. 259 total.
+- **orchestrator:** Fix Ctrl+C hangs and threading shutdown traceback.
+  Python threads cannot be killed when blocked in HTTP I/O; previous approach
+  of `shutdown(wait=True)` caused infinite hangs. Now uses `os._exit(130)`
+  hard exit after printing summary, marks unfinished books as cancelled, and
+  bypasses Python's thread-pool cleanup entirely. Wires `cancel_event`
+  through full download stack (cli → orchestrator → download_book → download_m4b).
+  Fixes `books_with_index[idx][0]` bug that returned int index instead of Book
+  object in post-interrupt collection. 256 tests pass.
+- **cli:** Remove redundant per-book verbose print in parallel download loop.
+  Progress bars already show author+title; the extra `⬇ title`/authors/narrators
+  block caused a triple-display (bars → details → live progress). 247 tests pass.
+- **cli:** Extract `main()` so argparse runs for installed console script.
+  `-v`/`--verbose` was dead because the entry point called `run()`
+  directly, bypassing the `if __name__ == "__main__"` argparse block.
+
 ## [1.1.0] - 2026-06-04
 
 ### Added
@@ -31,6 +54,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-06-03
 
+### Fixed
+
+- **history:** Make `DownloadHistory.write()` thread-safe with
+  `threading.Lock` so concurrent worker threads don't corrupt or lose
+  history entries during parallel downloads. Lock guards both in-memory
+  mutation and disk flush. 5 new tests (184 total) (closes #13)
+
+### Added
+
+- **progress:** Per-book identity mapping for concurrent progress bars:
+  replace singleton `_current_task`/`_current_book` with bidirectional
+  `_tasks`/`_book_ids` dicts keyed by `id(book)`. `start_download()` now
+  returns `task_id`, `update()` accepts optional `task_id` kwarg with
+  backward-compat fallback to most-recent task. `complete()`/`fail()`
+  clean up both mappings. PlainTextReporter unchanged (already stateless).
+  10 new tests (194 total) (closes #14)
+
+- **config:** Parallel download worker count: `workers` field on Config dataclass
+  (default 3), `InvalidWorkersError` validation for values < 1, YAML parsing
+  from `librofm.workers`, and `-w`/`--workers` CLI flag with three-layer
+  resolution (CLI > config > default). 6 new tests (179 total) (closes #12)
+
+- **orchestrator:** ThreadPoolExecutor-based parallel download engine:
+  `download_all_books()` replaces sequential for-loop in cli.py, submitting all
+  books as futures with per-future failure isolation. Returns `OrchestratorResult`
+  dataclass with stable-sorted counts, failed_books as (Book, reason) tuples,
+  and skipped_books as Book objects. `_raw_to_book()` conversion extracted from
+  cli.py. 20 new tests (218 total) (closes #16)
+
+- **orchestrator:** Graceful Ctrl+C drain during parallel downloads:
+  first interrupt prints "Aborting...", drains in-flight downloads via
+  `executor.shutdown(wait=True)`, then re-raises for exit code 130; second
+  interrupt during drain force-quits immediately with
+  `shutdown(cancel_futures=True)`. 13 new integration tests covering
+  workers=1 regression parity, concurrent execution proof, summary ordering,
+  failure isolation, verbose overlap safety, double-Ctrl+C fast exit, and
+  partial file resume-safety after interrupt (231 total) (closes #17)
+
+- MP3 format fallback: download manifest fetch, ZIP part download+extraction
+  with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
+  mp3_only, m4b_only), and `--limit` CLI flag for capped downloads
+
+
+## [1.0.0]] - 2026-06-03
+
 ### Documentation
 - **docs site (closes #10):** MkDocs documentation with 8 pages — Quickstart,
   Configuration Reference, Secrets, Path Patterns, Format Strategies, CLI Usage,
@@ -39,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparison, and project comparison note.
 
 ### Added
+
 - MP3 format fallback: download manifest fetch, ZIP part download+extraction
   with .partial tracking and resume, format strategy selector (m4b_mp3_fallback,
   mp3_only, m4b_only), and `--limit` CLI flag for capped downloads

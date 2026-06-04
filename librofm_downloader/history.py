@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class DownloadHistory:
     def __init__(self, path: Path | str):
         self._path = Path(path)
         self._data: dict[str, dict] = {}
+        self._lock = threading.Lock()
         self._load()
 
     def _load(self) -> None:
@@ -51,9 +53,10 @@ class DownloadHistory:
         return str(isbn) in self._data
 
     def write(self, entry: HistoryEntry) -> None:
-        """Persist a history entry to disk."""
-        self._data[entry.isbn] = asdict(entry)
-        self._flush()
+        """Persist a history entry to disk. Thread-safe."""
+        with self._lock:
+            self._data[entry.isbn] = asdict(entry)
+            self._flush()
 
     def _flush(self) -> None:
         """Write current in-memory state to disk."""

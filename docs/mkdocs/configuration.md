@@ -72,6 +72,7 @@ All non-credential settings. Safe to commit. **Optional** — if missing, built-
 | `output_dir` | `string` | `"./audiobooks"` | Base directory for downloaded files. Relative paths resolve from CWD. |
 | `download_extras` | `boolean` | `true` | Download PDF extras (e.g., maps) when available. |
 | `download_covers` | `boolean` | `true` | Download cover art (JPEG/PNG) when available. |
+| `workers` | `integer` | `3` | Number of parallel download threads. Set to 1 for sequential mode. Must be ≥ 1. |
 
 ### Full example
 
@@ -81,6 +82,7 @@ librofm:
   output_dir: ./audiobooks
   download_extras: true
   download_covers: true
+  workers: 3
 ```
 
 ### Minimal example
@@ -90,6 +92,7 @@ Only `format` is meaningful here — everything else has a default:
 ```yaml
 librofm:
   format: mp3_only
+  workers: 5          # high-bandwidth connection
 ```
 
 ## How merging works
@@ -116,6 +119,7 @@ Move them to secrets.yaml (which is gitignored).
 | `Invalid format 'foo'` | Unknown format value | Use one of: `m4b_mp3_fallback`, `mp3_only`, `m4b_only` |
 | `config.yaml not found in ~/.config/.../config.yaml → ./config.yaml. Using built-in defaults.` | No config file in either location | Non-fatal — defaults used. Create `config.yaml` to customize. |
 | `Missing secrets.yaml. Searched: ~/.config/.../secrets.yaml → ./secrets.yaml.` | No secrets file in either location | Create `secrets.yaml` with your credentials in one of the searched locations. |
+| `Invalid workers value: 0` | Workers < 1 | Set `workers` to an integer ≥ 1 |
 
 ## Download history
 

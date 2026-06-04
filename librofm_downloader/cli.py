@@ -1,6 +1,8 @@
 """CLI entry point — wire config → auth → fetch library → download → history."""
 
+import os
 import sys
+import threading
 from pathlib import Path
 
 from rich.console import Console
@@ -9,6 +11,7 @@ from librofm_downloader.config import load_config, ConfigError, _resolve_config_
 from librofm_downloader.client import LibroFmClient, AuthError
 from librofm_downloader.history import DownloadHistory
 from librofm_downloader.downloader import Book, download_book
+from librofm_downloader.orchestrator import download_all_books
 from librofm_downloader.progress import DownloadReporter
 
 console = Console()
@@ -20,6 +23,7 @@ def run(
     history_path: str | None = None,
     verbose: bool = False,
     limit: int = 0,
+    workers: int = 0,
 ) -> int:
     """Main pipeline: load config → auth → fetch library → filter → download → summary.
 
@@ -28,10 +32,12 @@ def run(
         secrets_path: Path to secrets.yaml (gitignored).
         history_path: Path to download_history.json.
         verbose: Print extra detail (URLs, paths, API responses).
+        limit: Maximum number of books to download (0 = no limit).
+        workers: Parallel download worker count (0 = use config value).
 
     Returns:
         Exit code: 0 on success, 1 on fatal error, 130 on Ctrl+C interrupt.
-    """
+        """
 
     try:
         # 0. Resolve history path (XDG → CWD, default to XDG location)
@@ -77,6 +83,12 @@ def run(
             console.print(f"  output:   {config.output_dir}")
             console.print(f"  extras:   {config.download_extras}")
             console.print(f"  covers:   {config.download_covers}")
+            console.print(f"  user:     {config.username}")
+
+        # Resolve workers: CLI flag (>0?) → config.workers → default 3
+        resolved_workers = workers if workers > 0 else config.workers
+        if resolved_workers < 1:
+            resolved_workers = 3
             console.print(f"  user:     {config.username}")
 
         # 2. Authenticate
@@ -129,67 +141,43 @@ def run(
 
         # 5. Download loop with TTY-aware reporting
         reporter = DownloadReporter()
+        cancel_event = threading.Event()
         console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
 
-        downloaded = 0
-        skipped = 0
-        failed = 0
-        failed_books: list[tuple[Book, str]] = []
-        skipped_books: list[Book] = []
+        # --- Download loop (parallel via orchestrator — Issue #16) ---
 
-        for raw_book in new_books:
-            title = raw_book.get("title", "Unknown")
-            isbn = raw_book.get("isbn", "?")
-            authors = raw_book.get("authors", [])
-            audiobook_info = raw_book.get("audiobook_info", {}) or {}
-            narrators = audiobook_info.get("narrators", []) or raw_book.get("narrators", [])
-
-            if verbose:
-                console.print(f"  ⬇ {title}  [dim]({isbn})[/dim]")
-                console.print(f"     authors:   {', '.join(authors) or '?'}")
-                console.print(f"     narrators: {', '.join(narrators) or '?'}")
-
-            book = Book(
-                title=title,
-                authors=authors,
-                narrators=narrators,
-                isbn=isbn,
-                series=raw_book.get("series", ""),
-                series_num=raw_book.get("series_num"),
-                cover_url=raw_book.get("cover_url", ""),
-                pdf_extras=bool(audiobook_info.get("pdf_extras")) if audiobook_info else False,
-                publication_year=raw_book.get("publication_year"),
-                publication_month=raw_book.get("publication_month"),
-                publication_day=raw_book.get("publication_day"),
-            )
-
-            try:
-                reporter.start_download(book)
-                result = download_book(
+        def _make_download_fn():
+            """Closure capturing client, config, history, reporter for each book."""
+            def _download_fn(book: Book, *, progress: "Callable[[int], None] | None" = None):
+                # Allow orchestrator to inject a per-book bound progress callback.
+                # Falls back to the shared reporter.update when not in parallel mode.
+                if progress is None:
+                    progress = reporter.update
+                return download_book(
                     book=book,
                     client=client,
                     output_base=config.output_dir,
                     history=history,
                     format_strategy=config.format,
                     config=config,
-                    progress=reporter.update,
+                    progress=progress,
+                    cancel_event=cancel_event,
                 )
-                if result is None:
-                    console.print(f"    [yellow]⏭ Skipped[/yellow]")
-                    skipped += 1
-                    skipped_books.append(book)
-                else:
-                    reporter.complete(book)
-                    if verbose:
-                        console.print(f"    [dim]  {result.stat().st_size:,} bytes[/dim]")
-                    downloaded += 1
-            except Exception as exc:
-                reporter.fail(book, reason=str(exc))
-                if verbose:
-                    import traceback
-                    traceback.print_exc()
-                failed += 1
-                failed_books.append((book, str(exc)))
+            return _download_fn
+
+        result = download_all_books(
+            new_books,
+            workers=resolved_workers,
+            download_fn=_make_download_fn(),
+            reporter=reporter,
+            cancel_event=cancel_event,
+        )
+
+        downloaded = result.downloaded_count
+        skipped = result.skipped_count
+        failed = result.failed_count
+        failed_books = result.failed_books
+        skipped_books = result.skipped_books
 
         reporter.summary(
             downloaded=downloaded,
@@ -198,6 +186,9 @@ def run(
             failed_books=failed_books,
             skipped_books=skipped_books,
         )
+
+        if result.interrupted:
+            return 130
 
         if verbose:
             console.print("[dim]── done ────────────────────────────────────────[/dim]")
@@ -209,7 +200,8 @@ def run(
         return 130
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI entry point — parse args and run the download pipeline."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Download audiobooks from Libro.fm")
@@ -224,12 +216,32 @@ if __name__ == "__main__":
         metavar="N",
         help="Maximum number of books to download (0 = no limit). Useful for testing.",
     )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Parallel download workers (0 = use config value). Default: 3.",
+    )
     args = parser.parse_args()
 
-    sys.exit(run(
+    exit_code = run(
         config_path=args.config,
         secrets_path=args.secrets,
         history_path=args.history,
         verbose=args.verbose,
         limit=args.limit,
-    ))
+        workers=args.workers,
+    )
+    if exit_code == 130:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        finally:
+            os._exit(130)
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
