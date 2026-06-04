@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (prints notice, uses built-in defaults); missing secrets.yaml raises
   domain error listing searched paths. All OS exceptions wrapped as
   `ConfigError`. XDG directory auto-created on demand.
+- **cli (closes #23):** Wire XDG path resolution into CLI layer.
+  History path defaults to `None` (resolves XDG → CWD, falls back to XDG
+  location). Missing config message now lists searched paths. `--verbose`
+  shows resolved file paths for config, secrets, and history. Explicit
+  `--config`/`--secrets`/`--history` flags bypass search. Clean exit 1
+  with no traceback when secrets missing from all locations.
 
 ### Documentation
 - **docs site (closes #10):** MkDocs documentation with 8 pages — Quickstart,

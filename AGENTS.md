@@ -8,6 +8,7 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
 |------|------|------|---------|
+| 2026-06-04 | issue | [20260604-issue23-wire-xdg-resolution-into-cli_log.md](docs/devlog/20260604-issue23-wire-xdg-resolution-into-cli_log.md) | **Issue #23 Complete:** Wire XDG resolution into CLI — history path XDG default, verbose resolved paths, searched-paths message. **7 new tests, 188 total** · **10/10 AC** |
 | 2026-06-04 | issue | [20260604-issue22-xdg-config-path-resolution-with-cwd-fallback_log.md](docs/devlog/20260604-issue22-xdg-config-path-resolution-with-cwd-fallback_log.md) | **Issue #22 Complete:** XDG→CWD path resolution, `load_config(None, None)` search, missing-config notice, OS→domain error wrapping. **9 new tests, 181 total** · **8/8 AC** |
 | 2026-06-03 | issue | [20260603-issue10-documentation-site-and-readme_log.md](docs/devlog/20260603-issue10-documentation-site-and-readme_log.md) | **Issue #10 Complete:** MkDocs site (8 pages) + polished README. Material theme, flat URLs. **11/11 AC** · **172 tests pass** |
 | 2026-06-03 | slice | [20260603-slice-6b-summary-exit-codes-and-integration-tests-issue9_log.md](docs/devlog/20260603-slice-6b-summary-exit-codes-and-integration-tests-issue9_log.md) | **Issue #9 Complete:** Enhanced summary (failed/skipped book details) + graceful Ctrl+C (exit 130) + 3 integration tests. **12 new tests, 168 total** · **15/15 AC** |
