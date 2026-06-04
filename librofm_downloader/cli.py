@@ -192,7 +192,8 @@ def run(
         return 130
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI entry point — parse args and run the download pipeline."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Download audiobooks from Libro.fm")
@@ -225,3 +226,7 @@ if __name__ == "__main__":
         limit=args.limit,
         workers=args.workers,
     ))
+
+
+if __name__ == "__main__":
+    main()

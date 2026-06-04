@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-librofm-downloader = "librofm_downloader.cli:run"
+librofm-downloader = "librofm_downloader.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["librofm_downloader*"]
