@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from rich.console import Console
 
-from librofm_downloader.downloader import Book
+from librofm_downloader.book import Book, from_library_row
 
 
 def _hard_exit(code: int) -> None:
@@ -54,27 +54,6 @@ class OrchestratorResult:
     interrupted: bool = False
 
 
-def _raw_to_book(raw: dict) -> Book:
-    """Convert a Libro.fm API dict to a Book object.
-
-    Mirrors the Book-building logic previously in cli.py's download loop.
-    """
-    audiobook_info = raw.get("audiobook_info", {}) or {}
-    narrators = audiobook_info.get("narrators", []) or raw.get("narrators", [])
-
-    return Book(
-        title=raw.get("title", "Unknown"),
-        authors=raw.get("authors", []),
-        narrators=narrators,
-        isbn=raw.get("isbn", "?"),
-        series=raw.get("series", ""),
-        series_num=raw.get("series_num"),
-        cover_url=raw.get("cover_url", ""),
-        pdf_extras=bool(audiobook_info.get("pdf_extras")) if audiobook_info else False,
-        publication_year=raw.get("publication_year"),
-        publication_month=raw.get("publication_month"),
-        publication_day=raw.get("publication_day"),
-    )
 
 
 def _download_one(
@@ -140,7 +119,7 @@ def download_all_books(
 
     # Convert raw dicts to Book objects, preserving order and index
     books_with_index: list[tuple[int, Book]] = [
-        (i, _raw_to_book(raw)) for i, raw in enumerate(raw_books)
+        (i, from_library_row(raw)) for i, raw in enumerate(raw_books)
     ]
 
     downloaded_count = 0

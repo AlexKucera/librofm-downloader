@@ -10,7 +10,8 @@ from rich.console import Console
 from librofm_downloader.config import load_config, ConfigError, _resolve_config_file
 from librofm_downloader.client import LibroFmClient, AuthError
 from librofm_downloader.history import DownloadHistory
-from librofm_downloader.downloader import Book, download_book
+from librofm_downloader.book import Book
+from librofm_downloader.downloader import download_book
 from librofm_downloader.orchestrator import download_all_books
 from librofm_downloader.progress import DownloadReporter
 

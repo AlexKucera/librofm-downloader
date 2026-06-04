@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from librofm_downloader.downloader import Book
+from librofm_downloader.book import Book
 from librofm_downloader.orchestrator import OrchestratorResult, download_all_books
 
 

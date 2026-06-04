@@ -6,12 +6,14 @@ import unittest
 from pathlib import Path
 import tempfile
 
-from librofm_downloader.downloader import (
-    Book,
+from librofm_downloader.book import Book
+from librofm_downloader.path import (
+    sanitize,
+    resolve_path,
     needs_subdirectory,
     _resolve_output_dir,
-    resolve_path,
-    sanitize,
+)
+from librofm_downloader.downloader import (
     download_m4b,
     download_zip_part,
     download_book,

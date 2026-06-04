@@ -8,9 +8,8 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
 |------|------|------|---------|
+| 2026-06-04 | issue | [20260604-issue26-book-intake-module-bookpy-pathpy-extraction_log.md](docs/devlog/20260604-issue26-book-intake-module-bookpy-pathpy-extraction_log.md) | **Issue #26 Complete:** Book intake (`book.py`) + path logic (`path.py`) extraction from monolithic `downloader.py`. `Book` dataclass + `from_library_row()`, sanitize/resolve_path/needs_subdirectory. **79 new tests, 338 total** · All pass |
 | 2026-06-04 | issue | [20260604-fix-parallel-progress-bar-task_id-not-wired-through-callback_log.md](docs/devlog/20260604-fix-parallel-progress-bar-task_id-not-wired-through-callback_log.md) | **Fix:** Parallel progress bars only updated one book — `task_id` never threaded from `start_download()` through to `update()` callback. Per-book closure binding in orchestrator. **3 new tests, 259 total** · **256/259 pass** (3 pre-existing Ctrl+C hang) |
-| Date | Type | File | Summary |
-|------|------|------|---------|
 | 2026-06-04 | issue | [20260604-fix-verbose-flag-not-wired-through-cli-entry-point_log.md](docs/devlog/20260604-fix-verbose-flag-not-wired-through-cli-entry-point_log.md) | **Fix:** `-v`/`--verbose` flag dead — argparse was in `__main__` guard, never reached by installed console script. Extracted `main()`, updated entry point. **247/247 tests pass** |
 | 2026-06-04 | issue | [20260604-fix-ctrl-c-hangs-and-threading-traceback_log.md](docs/devlog/20260604-fix-ctrl-c-hangs-and-threading-traceback_log.md) | **Fix:** Ctrl+C hangs + threading traceback. `os._exit(130)` hard exit, no-wait cancellation, wired `cancel_event` through full download stack, fixed `books_with_index[idx][1]` bug. **256/256 tests pass** |
 | 2026-06-04 | issue | [20260604-fix-keyboardinterrupt-handling-and-test-alignment_log.md](docs/devlog/20260604-fix-keyboardinterrupt-handling-and-test-alignment_log.md) | **Fix:** `except BaseException` in `_download_one`, cooperative cancellation framework, reporter lifecycle. **256/256 tests pass** |

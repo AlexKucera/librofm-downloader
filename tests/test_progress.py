@@ -6,7 +6,12 @@ import tempfile
 
 import pytest
 
-from librofm_downloader.downloader import Book
+from librofm_downloader.book import Book
+from librofm_downloader.downloader import (
+    download_m4b,
+    download_zip_part,
+    download_book,
+)
 from librofm_downloader.progress import DownloadReporter, PlainTextReporter, ProgressReporter
 
 
@@ -656,7 +661,8 @@ class TestProgressCallbackWiring:
         """progress callable passed to download_book reaches download_m4b."""
         import httpx
         from pathlib import Path
-        from librofm_downloader.downloader import Book, download_book
+        from librofm_downloader.book import Book
+        from librofm_downloader.downloader import download_book
         from librofm_downloader.client import LibroFmClient
         from librofm_downloader.history import DownloadHistory
 
