@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-06-04
 
 ### Added
 - **config (closes #22):** XDG config path resolution with CWD fallback.
@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows resolved file paths for config, secrets, and history. Explicit
   `--config`/`--secrets`/`--history` flags bypass search. Clean exit 1
   with no traceback when secrets missing from all locations.
+
+### Documentation
+- **docs (closes #24):** Update all documentation for XDG path resolution.
+  configuration.md: new "Default file locations" section with search order,
+  auto-creation, missing-config vs missing-secrets behavior, CLI flag
+  overrides, validation error table with "not found" messages, and
+  history default location. quickstart.md, cli-usage.md, troubleshooting.md,
+  and README.md updated to reference XDG-first search.
+
+## [1.0.0] - 2026-06-03
 
 ### Documentation
 - **docs site (closes #10):** MkDocs documentation with 8 pages — Quickstart,
