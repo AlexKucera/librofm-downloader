@@ -90,9 +90,17 @@ def _download_one(
         - error: exception string if download_fn raised, else None
         - was_skipped: True if download_fn returned None (skipped)
     """
-    reporter.start_download(book)
+    task_id = reporter.start_download(book)
+
+    # Create a per-book progress callback bound to this book's task_id.
+    # Without this, reporter.update() falls back to the most-recently-started
+    # bar (see ProgressReporter.update), so all parallel downloads would
+    # update the same progress bar.
+    def _progress(completed: int, *, total: int | None = None) -> None:
+        reporter.update(completed, total=total, task_id=task_id)
+
     try:
-        result = download_fn(book)
+        result = download_fn(book, progress=_progress)
         if result is None:
             # Skipped (no format available)
             reporter.complete(book)  # still "complete" the progress tracking

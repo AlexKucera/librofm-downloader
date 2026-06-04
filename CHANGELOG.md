@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **progress:** Wire task_id through parallel progress callback.
+  All concurrent download updates went to the same (most recently started) bar
+  because `task_id` was never threaded from `start_download()` to `update()`.
+  Create per-book closure in orchestrator that binds `task_id`, pass through
+  `cli._download_fn` as optional kwarg. 3 new regression tests. 259 total.
 - **orchestrator:** Fix Ctrl+C hangs and threading shutdown traceback.
   Python threads cannot be killed when blocked in HTTP I/O; previous approach
   of `shutdown(wait=True)` caused infinite hangs. Now uses `os._exit(130)`

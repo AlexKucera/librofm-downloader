@@ -71,7 +71,7 @@ class TestSequentialParity:
         """One book, workers=1 → downloaded_count=1, no failures."""
         results: list[Path | None] = []
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             results.append(Path(f"/fake/{book.isbn}.m4b"))
             return results[-1]
 
@@ -93,7 +93,7 @@ class TestSequentialParity:
         """Three books, workers=1 → all 3 downloaded, counts correct."""
         results: list[Path | None] = []
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             p = Path(f"/fake/{book.isbn}.m4b")
             results.append(p)
             return p
@@ -127,7 +127,7 @@ class TestSkippedBooks:
 
     def test_skipped_book_returned_in_result(self):
         """download_fn returning None → skipped_count=1, book in skipped_books."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             return None  # no format available
 
         raw_books = [_make_raw_book(isbn="978111", title="Skip Me")]
@@ -148,7 +148,7 @@ class TestSkippedBooks:
 
     def test_mixed_download_and_skip(self):
         """2 succeed, 1 skipped → correct counts and lists."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             if book.isbn == "978222":
                 return None  # skip this one
             return Path(f"/fake/{book.isbn}.m4b")
@@ -183,7 +183,7 @@ class TestFailedBooks:
 
     def test_failed_book_with_reason_tuple(self):
         """Exception → failed_count=1, (book, reason_string) in failed_books."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             raise ConnectionError("CDN unreachable")
 
         raw_books = [_make_raw_book(isbn="978111", title="Fail Book")]
@@ -206,7 +206,7 @@ class TestFailedBooks:
 
     def test_mixed_success_skip_fail(self):
         """1 downloads, 1 skips, 1 fails → all three buckets populated."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             if book.isbn == "978222":
                 return None
             if book.isbn == "978333":
@@ -247,7 +247,7 @@ class TestStableOrdering:
 
         # Book at index 0 takes longer to fail than book at index 1
         # This proves stable sort, not completion-order sort
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             if book.isbn == "978111":
                 time.sleep(0.05)  # index 0 is slower
             raise RuntimeError(f"fail {book.isbn}")
@@ -271,7 +271,7 @@ class TestStableOrdering:
 
     def test_skipped_books_sorted_by_original_order(self):
         """Skipped books maintain original library order."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             return None
 
         raw_books = [
@@ -308,7 +308,7 @@ class TestConcurrency:
         start_times: list[float] = []
         lock = threading.Lock()
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             with lock:
                 start_times.append(time.monotonic())
             time.sleep(0.05)  # simulate work
@@ -347,7 +347,7 @@ class TestFailureIsolation:
         """2nd book fails; 1st and 3rd still succeed."""
         results: list[str] = []
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             if book.isbn == "978222":
                 raise RuntimeError("boom")
             results.append(book.isbn)
@@ -376,7 +376,7 @@ class TestFailureIsolation:
 
         completed_isbns: list[str] = []
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             if book.isbn == "978111":
                 raise RuntimeError("instant fail")
             time.sleep(0.03)  # other books take time
@@ -413,7 +413,7 @@ class TestCallbackWiring:
         """Each book triggers exactly one download_fn call."""
         calls: list[Book] = []
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             calls.append(book)
             return Path(f"/fake/{book.isbn}.m4b")
 
@@ -439,7 +439,7 @@ class TestCallbackWiring:
         """The Book passed to download_fn has all fields from raw dict."""
         captured_book: Book | None = None
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             nonlocal captured_book
             captured_book = book
             return Path("/fake/book.m4b")
@@ -481,7 +481,7 @@ class TestReporterCallbacks:
         """Download success → start_download + complete (no fail)."""
         reporter = FakeReporter()
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             return Path(f"/fake/{book.isbn}.m4b")
 
         raw_books = [_make_raw_book(isbn="978111", title="OK")]
@@ -501,7 +501,7 @@ class TestReporterCallbacks:
         """Skipped book (None return) → start + complete, not fail."""
         reporter = FakeReporter()
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             return None
 
         raw_books = [_make_raw_book(isbn="978111", title="Skip")]
@@ -521,7 +521,7 @@ class TestReporterCallbacks:
         """Exception → start + fail (no complete)."""
         reporter = FakeReporter()
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             raise ConnectionError("network error")
 
         raw_books = [_make_raw_book(isbn="978111", title="Fail")]
@@ -542,7 +542,7 @@ class TestReporterCallbacks:
         """2 ok, 1 skip, 1 fail → correct callback counts."""
         reporter = FakeReporter()
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             if book.isbn == "978222":
                 return None
             if book.isbn == "978333":
@@ -578,7 +578,7 @@ class TestEdgeCases:
 
     def test_empty_book_list_returns_zero_result(self):
         """No books → OrchestratorResult with all zeros and empty lists."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             raise AssertionError("should never be called")  # noqa: TRY003
 
         result = download_all_books(
@@ -597,7 +597,7 @@ class TestEdgeCases:
 
     def test_all_books_fail(self):
         """Every book raises → failed_count=N, others zero."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             raise RuntimeError(f"fail {book.isbn}")
 
         raw_books = [
@@ -622,7 +622,7 @@ class TestEdgeCases:
 
     def test_all_books_skipped(self):
         """Every book returns None → skipped_count=N."""
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             return None
 
         raw_books = [
@@ -666,7 +666,7 @@ class TestCtrlCDrain:
 
         cancel_event = threading.Event()
 
-        def download_fn(book: Book) -> Path | None:
+        def download_fn(book: Book, **_kwargs) -> Path | None:
             if book.isbn == "978111":
                 raise RuntimeError("Simulated download failure")
             return Path(f"/fake/{book.isbn}.m4b")

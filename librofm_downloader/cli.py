@@ -148,7 +148,11 @@ def run(
 
         def _make_download_fn():
             """Closure capturing client, config, history, reporter for each book."""
-            def _download_fn(book: Book):
+            def _download_fn(book: Book, *, progress: "Callable[[int], None] | None" = None):
+                # Allow orchestrator to inject a per-book bound progress callback.
+                # Falls back to the shared reporter.update when not in parallel mode.
+                if progress is None:
+                    progress = reporter.update
                 return download_book(
                     book=book,
                     client=client,
@@ -156,7 +160,7 @@ def run(
                     history=history,
                     format_strategy=config.format,
                     config=config,
-                    progress=reporter.update,
+                    progress=progress,
                     cancel_event=cancel_event,
                 )
             return _download_fn
