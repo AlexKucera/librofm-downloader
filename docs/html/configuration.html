@@ -523,13 +523,41 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#file-locations" class="md-nav__link">
+  <a href="#default-file-locations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        File locations
+        Default file locations
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Default file locations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#missing-files-config-vs-secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing files: config vs secrets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overriding-with-cli-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overriding with CLI flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -857,13 +885,41 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#file-locations" class="md-nav__link">
+  <a href="#default-file-locations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        File locations
+        Default file locations
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Default file locations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#missing-files-config-vs-secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing files: config vs secrets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overriding-with-cli-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overriding with CLI flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -971,12 +1027,52 @@
 
 
 <h1 id="configuration-reference">Configuration Reference</h1>
-<p>Complete reference for <code>config.yaml</code> and <code>secrets.yaml</code>.</p>
-<h2 id="file-locations">File locations</h2>
-<p>The CLI looks for these files in the <strong>current working directory</strong> by default:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>librofm-downloader<span class="w"> </span>--config<span class="w"> </span>config.yaml<span class="w"> </span>--secrets<span class="w"> </span>secrets.yaml
+<p>Complete reference for <code>config.yaml</code>, <code>secrets.yaml</code>, and download history.</p>
+<h2 id="default-file-locations">Default file locations</h2>
+<p>When no <code>--config</code>, <code>--secrets</code>, or <code>--history</code> flags are provided, the tool searches for each file in this order:</p>
+<ol>
+<li><strong>XDG directory</strong> — <code>~/.config/librofm-downloader/</code></li>
+<li><strong>Current working directory</strong> (CWD)</li>
+</ol>
+<p>The XDG directory is <strong>created automatically</strong> on first run if it doesn't exist. This means you can drop your files into <code>~/.config/librofm-downloader/</code> and run <code>librofm-downloader</code> from any directory.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>~/.config/librofm-downloader/
+</span><span id="__span_0__-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── config.yaml          # optional — built-in defaults used if missing
+</span><span id="__span_0__-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── secrets.yaml         # required — tool exits with an error if missing
+</span><span id="__span_0__-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>└── download_history.json # created automatically on first download
 </span></code></pre></div>
-<p>Both files share the same top-level key: <code>librofm</code>.</p>
+<h3 id="missing-files-config-vs-secrets">Missing files: config vs secrets</h3>
+<p>The two config files have different missing-file behavior:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>If missing</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config.yaml</code></td>
+<td>Non-fatal</td>
+<td>Tool runs with built-in defaults (m4b_mp3_fallback, <code>./audiobooks</code>, etc.). A notice is printed listing searched paths.</td>
+</tr>
+<tr>
+<td><code>secrets.yaml</code></td>
+<td>Fatal</td>
+<td>Tool exits with code <strong>1</strong> and an error listing both searched locations so you know where to create it.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="overriding-with-cli-flags">Overriding with CLI flags</h3>
+<p>Use <code>--config</code>, <code>--secrets</code>, and <code>--history</code> to bypass the XDG→CWD search entirely and point at specific files:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Use files in a custom location</span>
+</span><span id="__span_0__-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>librofm-downloader<span class="w"> </span>--config<span class="w"> </span>/path/to/config.yaml<span class="w"> </span>--secrets<span class="w"> </span>/path/to/secrets.yaml
+</span><span id="__span_0__-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span_0__-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Custom history file</span>
+</span><span id="__span_0__-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>librofm-downloader<span class="w"> </span>--history<span class="w"> </span>/path/to/download_history.json
+</span></code></pre></div>
+<p>When a flag is provided, that path is used directly — no search is performed.</p>
+<p>Both config files share the same top-level key: <code>librofm</code>.</p>
 <h2 id="secretsyaml">secrets.yaml</h2>
 <p>Credentials only. This file must <strong>not</strong> be committed to version control.</p>
 <table>
@@ -1003,9 +1099,9 @@
 </tr>
 </tbody>
 </table>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span_0__-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">librofm</span><span class="p">:</span>
-</span><span id="__span_0__-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-email@example.com</span>
-</span><span id="__span_0__-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-password</span>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span_0__-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">librofm</span><span class="p">:</span>
+</span><span id="__span_0__-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-email@example.com</span>
+</span><span id="__span_0__-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-password</span>
 </span></code></pre></div>
 <blockquote>
 <p>[!IMPORTANT]
@@ -1013,7 +1109,7 @@ Only <code>username</code> and <code>password</code> belong in this file. All ot
 If either field is missing, the tool exits with code <strong>1</strong> and an error message.</p>
 </blockquote>
 <h2 id="configyaml">config.yaml</h2>
-<p>All non-credential settings. Safe to commit.</p>
+<p>All non-credential settings. Safe to commit. <strong>Optional</strong> — if missing, built-in defaults are used.</p>
 <table>
 <thead>
 <tr>
@@ -1057,18 +1153,18 @@ If either field is missing, the tool exits with code <strong>1</strong> and an e
 </tbody>
 </table>
 <h3 id="full-example">Full example</h3>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span_0__-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">librofm</span><span class="p">:</span>
-</span><span id="__span_0__-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">m4b_mp3_fallback</span>
-</span><span id="__span_0__-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./audiobooks</span>
-</span><span id="__span_0__-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">download_extras</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-</span><span id="__span_0__-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">download_covers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-</span><span id="__span_0__-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span_0__-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">librofm</span><span class="p">:</span>
+</span><span id="__span_0__-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">m4b_mp3_fallback</span>
+</span><span id="__span_0__-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./audiobooks</span>
+</span><span id="__span_0__-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">download_extras</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span_0__-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">download_covers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span_0__-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
 </span></code></pre></div>
 <h3 id="minimal-example">Minimal example</h3>
 <p>Only <code>format</code> is meaningful here — everything else has a default:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span_0__-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">librofm</span><span class="p">:</span>
-</span><span id="__span_0__-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mp3_only</span>
-</span><span id="__span_0__-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">          </span><span class="c1"># high-bandwidth connection</span>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span_0__-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">librofm</span><span class="p">:</span>
+</span><span id="__span_0__-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mp3_only</span>
+</span><span id="__span_0__-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">          </span><span class="c1"># high-bandwidth connection</span>
 </span></code></pre></div>
 <h2 id="how-merging-works">How merging works</h2>
 <p><code>config.yaml</code> and <code>secrets.yaml</code> are <strong>deep-merged</strong> at startup:</p>
@@ -1078,8 +1174,8 @@ If either field is missing, the tool exits with code <strong>1</strong> and an e
 <li>The merged result is validated</li>
 </ol>
 <p>This means you could theoretically put any field in either file — but <strong>credentials in <code>config.yaml</code> are explicitly rejected</strong> at load time with a clear error:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Config error: Credentials (username, password) found in config.yaml.
-</span><span id="__span_0__-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Move them to secrets.yaml (which is gitignored).
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Config error: Credentials (username, password) found in config.yaml.
+</span><span id="__span_0__-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>Move them to secrets.yaml (which is gitignored).
 </span></code></pre></div>
 <h2 id="validation-errors">Validation errors</h2>
 <table>
@@ -1107,6 +1203,16 @@ If either field is missing, the tool exits with code <strong>1</strong> and an e
 <td>Use one of: <code>m4b_mp3_fallback</code>, <code>mp3_only</code>, <code>m4b_only</code></td>
 </tr>
 <tr>
+<td><code>config.yaml not found in ~/.config/.../config.yaml → ./config.yaml. Using built-in defaults.</code></td>
+<td>No config file in either location</td>
+<td>Non-fatal — defaults used. Create <code>config.yaml</code> to customize.</td>
+</tr>
+<tr>
+<td><code>Missing secrets.yaml. Searched: ~/.config/.../secrets.yaml → ./secrets.yaml.</code></td>
+<td>No secrets file in either location</td>
+<td>Create <code>secrets.yaml</code> with your credentials in one of the searched locations.</td>
+</tr>
+<tr>
 <td><code>Invalid workers value: 0</code></td>
 <td>Workers &lt; 1</td>
 <td>Set <code>workers</code> to an integer ≥ 1</td>
@@ -1114,21 +1220,23 @@ If either field is missing, the tool exits with code <strong>1</strong> and an e
 </tbody>
 </table>
 <h2 id="download-history">Download history</h2>
-<p>A third file, <code>download_history.json</code>, is created automatically on first run:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span_0__-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-</span><span id="__span_0__-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;9780743565400&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span_0__-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">&quot;isbn&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9780743565400&quot;</span><span class="p">,</span>
-</span><span id="__span_0__-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The Way of Kings&quot;</span><span class="p">,</span>
-</span><span id="__span_0__-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">&quot;format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;m4b&quot;</span><span class="p">,</span>
-</span><span id="__span_0__-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./audiobooks/Brandon Sanderson/The Way of Kings/The Way of Kings.m4b&quot;</span><span class="p">,</span>
-</span><span id="__span_0__-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="nt">&quot;downloaded_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-06-03T10:30:00+00:00&quot;</span>
-</span><span id="__span_0__-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span_0__-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="p">}</span>
+<p>A third file, <code>download_history.json</code>, tracks what's been downloaded. It follows the same XDG→CWD search order as the config files, and defaults to the XDG directory when not found anywhere:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>~/.config/librofm-downloader/download_history.json
+</span></code></pre></div>
+<p>The file is created automatically on first download. Override with <code>--history</code> to use a custom location.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span_0__-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+</span><span id="__span_0__-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;9780743565400&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span_0__-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nt">&quot;isbn&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9780743565400&quot;</span><span class="p">,</span>
+</span><span id="__span_0__-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;The Way of Kings&quot;</span><span class="p">,</span>
+</span><span id="__span_0__-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">&quot;format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;m4b&quot;</span><span class="p">,</span>
+</span><span id="__span_0__-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./audiobooks/Brandon Sanderson/The Way of Kings/The Way of Kings.m4b&quot;</span><span class="p">,</span>
+</span><span id="__span_0__-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;downloaded_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-06-03T10:30:00+00:00&quot;</span>
+</span><span id="__span_0__-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span_0__-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
 </span></code></pre></div>
 <ul>
 <li>Keyed by <strong>ISBN</strong> — each book is recorded once</li>
 <li>Used to skip already-downloaded books on subsequent runs</li>
-<li>Location defaults to <code>download_history.json</code> in CWD; override with <code>--history</code></li>
 <li>If the file is corrupt or missing, the tool starts with an empty history (and logs a warning)</li>
 </ul>
 

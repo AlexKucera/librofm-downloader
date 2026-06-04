@@ -12,9 +12,9 @@ librofm-downloader [OPTIONS]
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--config` | | `config.yaml` | Path to `config.yaml` |
-| `--secrets` | | `secrets.yaml` | Path to `secrets.yaml` |
-| `--history` | | `download_history.json` | Path to download history JSON file |
+| `--config` | | XDG → CWD search | Path to `config.yaml` (overrides default search) |
+| `--secrets` | | XDG → CWD search | Path to `secrets.yaml` (overrides default search) |
+| `--history` | | XDG → CWD search | Path to download history JSON (overrides default search) |
 | `-v, --verbose` | | off | Print extra detail (URLs, paths, API responses) |
 | `--limit` N | | `0` (no limit) | Maximum number of books to download |
 | `-w, --workers` N | | `3` | Number of parallel download workers (1 = sequential) |
@@ -25,9 +25,9 @@ Shows internal pipeline state at each stage:
 
 ```
 ── config ──────────────────────────────────────
-  config:  config.yaml
-  secrets: secrets.yaml
-  history: download_history.json
+  config:   ~/.config/librofm-downloader/config.yaml
+  secrets:  ~/.config/librofm-downloader/secrets.yaml
+  history:  ~/.config/librofm-downloader/download_history.json
   format:   m4b_mp3_fallback
   output:   ./audiobooks
   extras:   True

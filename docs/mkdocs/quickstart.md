@@ -26,12 +26,16 @@ The `[dev]` extra installs pytest for testing — omit it if you only want to ru
 
 ## 2. Configure
 
-librofm-downloader uses two YAML files:
+librofm-downloader uses two YAML files, searched in `~/.config/librofm-downloader/` first, then the current working directory:
 
-| File | Purpose | Committed to git? |
-|------|---------|:-----------------:|
-| `config.yaml` | Preferences (format, output dir, toggles) | ✅ Yes |
-| `secrets.yaml` | Credentials only | ❌ No (gitignored) |
+| File | Purpose | Required? | Committed to git? |
+|------|---------|:---------:|:-----------------:|
+| `config.yaml` | Preferences (format, output dir, toggles) | No (defaults used) | ✅ Yes |
+| `secrets.yaml` | Credentials only | **Yes** | ❌ No (gitignored) |
+
+> [!TIP]
+> The XDG directory (`~/.config/librofm-downloader/`) is created automatically on first run.
+> Place both files there to run `librofm-downloader` from any directory.
 
 ### config.yaml
 
@@ -79,12 +83,13 @@ librofm-downloader
 
 This:
 
-1. Loads `config.yaml` + `secrets.yaml`
+1. Searches for `config.yaml` + `secrets.yaml` (XDG directory first, then CWD)
 2. Authenticates with Libro.fm via OAuth2 password grant
 3. Fetches your full library (all pages)
-4. Skips books already in `download_history.json`
-5. Downloads each new book (3 parallel workers by default) with a progress bar
-6. Records successful downloads to history
+4. Skips books already in `download_history.json` (XDG → CWD search)
+5. Downloads each new book with a progress bar
+6. Downloads each new book (3 parallel workers by default) with a progress bar
+7. Records successful downloads to history
 
 ### First run output (TTY)
 

@@ -75,7 +75,7 @@ via HTTP Range header on next run. Renamed to final filename on completion.
 `config.yaml` at runtime. Script errors if credentials found in config.yaml.
 
 ### **Sync Run**
-One execution of the script: auth → fetch library → filter undownloaded
+One execution of the script: auth → fetch library → (select mode or filter undownloaded)
 → download each (sequentially or in parallel) → write history → print summary → exit.
 
 ### **Workers**
@@ -97,3 +97,18 @@ Endpoints:
 - GET /api/v10/download-manifest?isbn= — MP3 download manifest (parts[], tracks[])
 - GET /api/v10/explore/audiobook_details/{isbn} — Full book details
 - GET /api/v10/library/{isbn}/pdf_extra_url?filename= — PDF extra download URL
+
+## Select Mode
+
+### **Select Mode**
+Optional interactive book selection, activated by `--select` CLI flag (off by default).
+Replaces the automatic history-filter + `--limit` pipeline stage with a user-driven TUI.
+Requires a TTY; exits with error if stdout is not a terminal.
+Powered by `questionary` library.
+
+When active, the pipeline becomes:
+auth → fetch library → hide already-downloaded → open checkbox TUI
+→ user picks books → confirm summary (y/N) → download(selected) → write history.
+
+Selection rows show: `Title — First Author [Series #]`. All books unchecked by default.
+Empty selection → exit 0. All books already downloaded → same "caught up" message as non-select mode.

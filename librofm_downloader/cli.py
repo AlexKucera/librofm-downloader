@@ -5,7 +5,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from librofm_downloader.config import load_config, ConfigError
+from librofm_downloader.config import load_config, ConfigError, _resolve_config_file
 from librofm_downloader.client import LibroFmClient, AuthError
 from librofm_downloader.history import DownloadHistory
 from librofm_downloader.downloader import Book, download_book
@@ -16,9 +16,9 @@ console = Console()
 
 
 def run(
-    config_path: str = "config.yaml",
-    secrets_path: str = "secrets.yaml",
-    history_path: str = "download_history.json",
+    config_path: str | None = None,
+    secrets_path: str | None = None,
+    history_path: str | None = None,
     verbose: bool = False,
     limit: int = 0,
     workers: int = 0,
@@ -38,20 +38,45 @@ def run(
         """
 
     try:
-        if verbose:
-            console.print("[dim]── config ──────────────────────────────────────[/dim]")
-            console.print(f"  config:  {config_path}")
-            console.print(f"  secrets: {secrets_path}")
-            console.print(f"  history: {history_path}")
+        # 0. Resolve history path (XDG → CWD, default to XDG location)
+        if history_path is None:
+            resolved = _resolve_config_file("download_history.json")
+            if resolved is not None:
+                history_path = str(resolved)
+            else:
+                from os import environ
+                home = Path(environ.get("HOME", "~")).expanduser()
+                xdg_dir = home / ".config" / "librofm-downloader"
+                xdg_dir.mkdir(parents=True, exist_ok=True)
+                history_path = str(xdg_dir / "download_history.json")
 
         # 1. Load config
         try:
             config = load_config(config_path, secrets_path)
+            if config._config_path is None:
+                searched = [
+                    "~/.config/librofm-downloader/config.yaml",
+                    "./config.yaml",
+                ]
+                console.print(
+                    f"[yellow]config.yaml not found in {' → '.join(searched)}. "
+                    f"Using built-in defaults.[/yellow]"
+                )
         except ConfigError as exc:
             console.print(f"[red]Config error:[/red] {exc}")
             return 1
 
         if verbose:
+            console.print("[dim]── config ──────────────────────────────────────[/dim]")
+            cfg_display = config._config_path if config._config_path else "(built-in defaults)"
+            # Determine resolved secrets path
+            secrets_display = secrets_path
+            if secrets_path is None:
+                resolved_secrets = _resolve_config_file("secrets.yaml")
+                secrets_display = resolved_secrets or "(not found)"
+            console.print(f"  config:   {cfg_display}")
+            console.print(f"  secrets:  {secrets_display}")
+            console.print(f"  history:  {history_path}")
             console.print(f"  format:   {config.format}")
             console.print(f"  output:   {config.output_dir}")
             console.print(f"  extras:   {config.download_extras}")
@@ -171,9 +196,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Download audiobooks from Libro.fm")
-    parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
-    parser.add_argument("--secrets", default="secrets.yaml", help="Path to secrets.yaml")
-    parser.add_argument("--history", default="download_history.json", help="Path to download history JSON")
+    parser.add_argument("--config", default=None, help="Path to config.yaml (default: search XDG then CWD)")
+    parser.add_argument("--secrets", default=None, help="Path to secrets.yaml (default: search XDG then CWD)")
+    parser.add_argument("--history", default=None, help="Path to download history JSON (default: search XDG then CWD)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output (URLs, sizes, tracebacks)")
     parser.add_argument(
         "--limit",

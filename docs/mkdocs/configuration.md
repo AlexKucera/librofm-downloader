@@ -1,16 +1,47 @@
 # Configuration Reference
 
-Complete reference for `config.yaml` and `secrets.yaml`.
+Complete reference for `config.yaml`, `secrets.yaml`, and download history.
 
-## File locations
+## Default file locations
 
-The CLI looks for these files in the **current working directory** by default:
+When no `--config`, `--secrets`, or `--history` flags are provided, the tool searches for each file in this order:
 
-```bash
-librofm-downloader --config config.yaml --secrets secrets.yaml
+1. **XDG directory** — `~/.config/librofm-downloader/`
+2. **Current working directory** (CWD)
+
+The XDG directory is **created automatically** on first run if it doesn't exist. This means you can drop your files into `~/.config/librofm-downloader/` and run `librofm-downloader` from any directory.
+
+```
+~/.config/librofm-downloader/
+├── config.yaml          # optional — built-in defaults used if missing
+├── secrets.yaml         # required — tool exits with an error if missing
+└── download_history.json # created automatically on first download
 ```
 
-Both files share the same top-level key: `librofm`.
+### Missing files: config vs secrets
+
+The two config files have different missing-file behavior:
+
+| File | If missing | Behavior |
+|------|-----------|----------|
+| `config.yaml` | Non-fatal | Tool runs with built-in defaults (m4b_mp3_fallback, `./audiobooks`, etc.). A notice is printed listing searched paths. |
+| `secrets.yaml` | Fatal | Tool exits with code **1** and an error listing both searched locations so you know where to create it. |
+
+### Overriding with CLI flags
+
+Use `--config`, `--secrets`, and `--history` to bypass the XDG→CWD search entirely and point at specific files:
+
+```bash
+# Use files in a custom location
+librofm-downloader --config /path/to/config.yaml --secrets /path/to/secrets.yaml
+
+# Custom history file
+librofm-downloader --history /path/to/download_history.json
+```
+
+When a flag is provided, that path is used directly — no search is performed.
+
+Both config files share the same top-level key: `librofm`.
 
 ## secrets.yaml
 
@@ -33,7 +64,7 @@ librofm:
 
 ## config.yaml
 
-All non-credential settings. Safe to commit.
+All non-credential settings. Safe to commit. **Optional** — if missing, built-in defaults are used.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -86,11 +117,19 @@ Move them to secrets.yaml (which is gitignored).
 | `Config error: Credentials (...) found in config.yaml` | Username or password in config file | Move to `secrets.yaml` |
 | `Missing required fields in secrets.yaml: username` | Missing credential field | Add it to `secrets.yaml` |
 | `Invalid format 'foo'` | Unknown format value | Use one of: `m4b_mp3_fallback`, `mp3_only`, `m4b_only` |
+| `config.yaml not found in ~/.config/.../config.yaml → ./config.yaml. Using built-in defaults.` | No config file in either location | Non-fatal — defaults used. Create `config.yaml` to customize. |
+| `Missing secrets.yaml. Searched: ~/.config/.../secrets.yaml → ./secrets.yaml.` | No secrets file in either location | Create `secrets.yaml` with your credentials in one of the searched locations. |
 | `Invalid workers value: 0` | Workers < 1 | Set `workers` to an integer ≥ 1 |
 
 ## Download history
 
-A third file, `download_history.json`, is created automatically on first run:
+A third file, `download_history.json`, tracks what's been downloaded. It follows the same XDG→CWD search order as the config files, and defaults to the XDG directory when not found anywhere:
+
+```
+~/.config/librofm-downloader/download_history.json
+```
+
+The file is created automatically on first download. Override with `--history` to use a custom location.
 
 ```json
 {
@@ -106,5 +145,4 @@ A third file, `download_history.json`, is created automatically on first run:
 
 - Keyed by **ISBN** — each book is recorded once
 - Used to skip already-downloaded books on subsequent runs
-- Location defaults to `download_history.json` in CWD; override with `--history`
 - If the file is corrupt or missing, the tool starts with an empty history (and logs a warning)

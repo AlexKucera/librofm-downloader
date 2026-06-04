@@ -56,15 +56,19 @@ librofm:
 
 ### "[Errno 2] No such file or directory: 'config.yaml'"
 
-**Cause:** The config file doesn't exist at the specified path (default: current directory).
+**Cause:** The config file doesn't exist at the specified path.
 
 **Fix:**
 
 ```bash
-# Run from the directory that contains config.yaml
+# Option 1: Place files in the XDG directory (recommended)
+mkdir -p ~/.config/librofm-downloader
+cp config.yaml secrets.yaml ~/.config/librofm-downloader/
+
+# Option 2: Run from the directory that contains config.yaml
 cd /path/to/your/project
 
-# Or specify the path explicitly
+# Option 3: Specify paths explicitly
 librofm-downloader --config /path/to/config.yaml --secrets /path/to/secrets.yaml
 ```
 
@@ -133,10 +137,14 @@ $ librofm-downloader
 
 ```bash
 # Option 1: Delete and let it rebuild
+rm ~/.config/librofm-downloader/download_history.json
+librofm-downloader
+
+# Option 2: If using CWD-based history
 rm download_history.json
 librofm-downloader
 
-# Option 2: Fix the JSON manually (if you know what's in there)
+# Option 3: Fix the JSON manually (if you know what's in there)
 # Check for trailing commas, missing braces, etc.
 ```
 
@@ -147,7 +155,10 @@ librofm-downloader
 **Check:**
 
 ```bash
-# See what's recorded
+# See what's recorded (XDG location)
+cat ~/.config/librofm-downloader/download_history.json | python -m json.tool
+
+# Or if using CWD-based history
 cat download_history.json | python -m json.tool
 
 # Look for the ISBN of the book that's re-downloading
