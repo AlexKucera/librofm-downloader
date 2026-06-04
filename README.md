@@ -5,7 +5,7 @@
 
 **Download owned audiobooks from your Libro.fm account** — a lightweight, dependency-minimal CLI tool written in Python.
 
-No Docker. No JVM. Just `pip install` and go.
+No Docker. No JVM. Just Python and go.
 
 ## Features
 
@@ -22,8 +22,12 @@ No Docker. No JVM. Just `pip install` and go.
 ## Quick Start
 
 ```bash
-# 1. Install
-pip install librofm-downloader
+# 1. Install from source
+git clone https://github.com/AlexKucera/librofm-downloader.git
+cd librofm-downloader
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -e .
 
 # 2. Create XDG config directory
 mkdir -p ~/.config/librofm-downloader
@@ -79,7 +83,7 @@ Output paths follow a sensible default (`Author/Series/Book N Title` for series,
 
 ## Comparison
 
-This project is a **lightweight Python alternative** to the [Kotlin-based Docker container](https://github.com/advplyr/librofm-audiobook-downloader) that runs a full JVM. If you want something you can `pip install`, debug with standard Python tooling, and run without Docker — this is it.
+This project is a **lightweight Python alternative** to the [Kotlin-based Docker container](https://github.com/advplyr/librofm-audiobook-downloader) that runs a full JVM. If you want something you can debug with standard Python tooling and run without Docker — this is it.
 
 ## License
 

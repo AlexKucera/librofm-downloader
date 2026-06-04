@@ -4,10 +4,14 @@ Get librofm-downloader installed, configured, and running in three steps.
 
 ## 1. Install
 
-### From PyPI (recommended)
+### From source
 
 ```bash
-pip install librofm-downloader
+git clone https://github.com/AlexKucera/librofm-downloader.git
+cd librofm-downloader
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -e .
 ```
 
 Requires **Python 3.11+**.
