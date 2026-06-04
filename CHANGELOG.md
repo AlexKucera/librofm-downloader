@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **config (closes #22):** XDG config path resolution with CWD fallback.
+  `_resolve_config_file()` searches `~/.config/librofm-downloader/` then CWD.
+  `load_config(None, None)` triggers search; missing config.yaml is non-fatal
+  (prints notice, uses built-in defaults); missing secrets.yaml raises
+  domain error listing searched paths. All OS exceptions wrapped as
+  `ConfigError`. XDG directory auto-created on demand.
+
 ### Documentation
 - **docs site (closes #10):** MkDocs documentation with 8 pages — Quickstart,
   Configuration Reference, Secrets, Path Patterns, Format Strategies, CLI Usage,

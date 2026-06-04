@@ -15,8 +15,8 @@ console = Console()
 
 
 def run(
-    config_path: str = "config.yaml",
-    secrets_path: str = "secrets.yaml",
+    config_path: str | None = None,
+    secrets_path: str | None = None,
     history_path: str = "download_history.json",
     verbose: bool = False,
     limit: int = 0,
@@ -43,6 +43,8 @@ def run(
         # 1. Load config
         try:
             config = load_config(config_path, secrets_path)
+            if config._config_path is None:
+                console.print("[yellow]config.yaml not found. Using built-in defaults.[/yellow]")
         except ConfigError as exc:
             console.print(f"[red]Config error:[/red] {exc}")
             return 1
@@ -188,8 +190,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Download audiobooks from Libro.fm")
-    parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
-    parser.add_argument("--secrets", default="secrets.yaml", help="Path to secrets.yaml")
+    parser.add_argument("--config", default=None, help="Path to config.yaml (default: search XDG then CWD)")
+    parser.add_argument("--secrets", default=None, help="Path to secrets.yaml (default: search XDG then CWD)")
     parser.add_argument("--history", default="download_history.json", help="Path to download history JSON")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output (URLs, sizes, tracebacks)")
     parser.add_argument(
