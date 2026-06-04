@@ -8,7 +8,11 @@ All coordination logic lives here; cli.py stays a thin wiring layer.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import sys
+import threading
+import time
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -17,6 +21,19 @@ from rich.console import Console
 from librofm_downloader.downloader import Book
 
 
+def _hard_exit(code: int) -> None:
+    """Exit immediately without Python thread-pool cleanup.
+
+    ThreadPoolExecutor workers may be blocked in HTTP reads and cannot be
+    killed from Python. `sys.exit()` runs interpreter shutdown hooks that join
+    those workers, causing Ctrl+C tracebacks. For user interrupts, flush output
+    then bypass cleanup.
+    """
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    finally:
+        os._exit(code)
 @dataclass(frozen=True)
 class OrchestratorResult:
     """Structured result from a parallel download batch.
@@ -34,6 +51,7 @@ class OrchestratorResult:
     failed_count: int = 0
     failed_books: list[tuple[Book, str]] = field(default_factory=list)
     skipped_books: list[Book] = field(default_factory=list)
+    interrupted: bool = False
 
 
 def _raw_to_book(raw: dict) -> Book:
@@ -63,6 +81,7 @@ def _download_one(
     book: Book,
     download_fn: Callable[[Book], Any],
     reporter: Any,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[Book, Any, str | None, bool]:
     """Execute one book's download pipeline and return (book, result, error, was_skipped).
 
@@ -80,7 +99,7 @@ def _download_one(
             return book, None, None, True
         reporter.complete(book)
         return book, result, None, False
-    except Exception as exc:
+    except BaseException as exc:
         reporter.fail(book, reason=str(exc))
         return book, None, str(exc), False
 
@@ -91,6 +110,8 @@ def download_all_books(
     workers: int,
     download_fn: Callable[[Book], Any],
     reporter: Any,
+    cancel_event: threading.Event | None = None,
+    hard_exit: Callable[[int], Any] = _hard_exit,
 ) -> OrchestratorResult:
     """Run downloads for all books using a thread pool.
 
@@ -122,9 +143,11 @@ def download_all_books(
 
 
     executor = ThreadPoolExecutor(max_workers=workers)
+    executor_shutdown = False
+    processed_futures: set[Any] = set()
     try:
         futures = {
-            executor.submit(_download_one, book, download_fn, reporter): idx
+            executor.submit(_download_one, book, download_fn, reporter, cancel_event): idx
             for idx, book in books_with_index
         }
 
@@ -132,6 +155,7 @@ def download_all_books(
             for future in as_completed(futures):
                 original_idx = futures[future]
                 book, result, error, was_skipped = future.result()
+                processed_futures.add(future)
 
                 if error:
                     failed_count += 1
@@ -142,17 +166,94 @@ def download_all_books(
                 else:
                     downloaded_count += 1
         except KeyboardInterrupt:
-            # (Console imported at module level)
-            Console().print("\n[yellow]Aborting...[/yellow] (draining in-flight downloads)")
+            # --- Cooperative cancellation ---
+            # 1. Signal download loops to check between chunks and exit
+            if cancel_event is not None:
+                cancel_event.set()
+
+            # 2. Stop progress display BEFORE printing (prevents Rich corruption)
+            reporter.stop()
+
+            Console().print("\n[yellow]Aborting...[/yellow] (cancelling downloads)")
+
+            # 3. Cancel all pending futures (ones not yet started by workers)
+            for f in futures:
+                f.cancel()
+
+            # 4. Wait briefly for running tasks to notice cancel_event.
+            #    Each download loop checks between 8 MB chunks, so worst case
+            #    is ~1-2 seconds per task at slow connection speeds.
             try:
-                executor.shutdown(wait=True)
+                deadline = time.monotonic() + 2.0
+                for f in list(futures):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        f.result(timeout=min(remaining, 0.5))
+                    except Exception:
+                        pass  # cancelled/failed/interrupted — collect below
             except KeyboardInterrupt:
+                # Double Ctrl+C → user wants out NOW. Do not rely on Python
+                # shutdown; worker threads may be blocked in HTTP reads.
                 Console().print("\n[red]Force quit — partial downloads may be incomplete.[/red]")
                 executor.shutdown(wait=False, cancel_futures=True)
-                raise  # re-raise immediately for fast exit
-            raise  # re-raise single KeyboardInterrupt for cli.py to handle exit code 130
+                executor_shutdown = True
+                hard_exit(130)
+
+            # Do not wait for running worker threads here. A worker may be
+            # blocked in network I/O and Python cannot kill it. Mark every
+            # unfinished future as aborted, return a partial result, and let
+            # the CLI hard-exit after printing the summary.
+
+            # 5. Collect whatever results we have and mark unfinished work aborted.
+            for future in list(futures):
+                if future in processed_futures:
+                    continue
+                idx = futures.get(future)
+                if idx is None:
+                    continue
+                book = books_with_index[idx][1]
+
+                if not future.done():
+                    failed_count += 1
+                    failed_books.append((idx, book, "Download cancelled by user"))
+                    continue
+
+                try:
+                    _, result, error, was_skipped = future.result()
+                    if error:
+                        failed_count += 1
+                        failed_books.append((idx, book, error or "Download cancelled by user"))
+                    elif was_skipped:
+                        skipped_count += 1
+                        skipped_books.append((idx, book))
+                    else:
+                        downloaded_count += 1
+                except Exception as exc:
+                    failed_count += 1
+                    failed_books.append((idx, book, "cancelled" if isinstance(exc, CancelledError) else (str(exc) or "Download cancelled by user")))
+
+            # 6. Return partial result (no re-raise — CLI will hard-exit)
+            executor.shutdown(wait=False, cancel_futures=True)
+            executor_shutdown = True
+            failed_books.sort(key=lambda x: x[0])
+            skipped_books.sort(key=lambda x: x[0])
+            return OrchestratorResult(
+                downloaded_count=downloaded_count,
+                skipped_count=skipped_count,
+                failed_count=failed_count,
+                failed_books=[(b, r) for (_, b, r) in failed_books],
+                skipped_books=[b for (_, b) in skipped_books],
+                interrupted=True,
+            )
     finally:
-        executor.shutdown(wait=False)  # safety: only effective if not already shut down
+        if not executor_shutdown:
+            try:
+                executor.shutdown(wait=True, cancel_futures=True)
+            except KeyboardInterrupt:
+                Console().print("\n[red]Force quit — partial downloads may be incomplete.[/red]")
+                hard_exit(130)
 
     # Stable sort by original index to preserve library order
     failed_books.sort(key=lambda x: x[0])

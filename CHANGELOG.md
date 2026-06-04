@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **orchestrator:** Fix Ctrl+C hangs and threading shutdown traceback.
+  Python threads cannot be killed when blocked in HTTP I/O; previous approach
+  of `shutdown(wait=True)` caused infinite hangs. Now uses `os._exit(130)`
+  hard exit after printing summary, marks unfinished books as cancelled, and
+  bypasses Python's thread-pool cleanup entirely. Wires `cancel_event`
+  through full download stack (cli → orchestrator → download_book → download_m4b).
+  Fixes `books_with_index[idx][0]` bug that returned int index instead of Book
+  object in post-interrupt collection. 256 tests pass.
 - **cli:** Remove redundant per-book verbose print in parallel download loop.
   Progress bars already show author+title; the extra `⬇ title`/authors/narrators
   block caused a triple-display (bars → details → live progress). 247 tests pass.

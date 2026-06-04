@@ -323,6 +323,80 @@ class TestProgressReporterColumns:
 
 
 # ---------------------------------------------------------------------------
+# Test 7b: ProgressReporter.stop() — halts Rich Live display on interrupt
+# ---------------------------------------------------------------------------
+
+
+class TestProgressReporterStop:
+    """ProgressReporter.stop() safely halts the Rich Live display.
+
+    Critical for KeyboardInterrupt handling: stop() must be called before
+    any console output to prevent Rich's background thread from corrupting
+    interrupt messages with progress bar redraws.
+    """
+
+    def test_stop_calls_progress_stop_on_tty_reporter(self):
+        """TTY reporter's stop() delegates to rich.Progress.stop()."""
+        from unittest.mock import MagicMock, patch
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = DownloadReporter(stdout=mock_tty)
+        book = Book(title="StopTest", authors=["A"], narrators=["N"], isbn="9780000000005")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Progress should be active
+        assert reporter._progress is not None
+
+        # Mock the underlying progress.stop to verify it's called
+        original_stop = reporter._progress.stop
+        with patch.object(reporter._progress, 'stop', wraps=original_stop) as mock_stop:
+            reporter.stop()
+            mock_stop.assert_called_once()
+
+    def test_stop_is_idempotent(self):
+        """Calling stop() twice doesn't raise (safe for finally blocks)."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = DownloadReporter(stdout=mock_tty)
+        book = Book(title="Idempotent", authors=["A"], narrators=["N"], isbn="9780000000006")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Should not raise on double-stop
+        reporter.stop()
+        reporter.stop()  # second call must be safe
+
+    def test_stop_on_plain_text_reporter_is_noop(self):
+        """PlainTextReporter.stop() is a safe no-op."""
+        import io
+
+        fake_stdout = io.StringIO()
+        fake_stdout.isatty = lambda: False
+
+        reporter = DownloadReporter(stdout=fake_stdout)
+        book = Book(title="Plain", authors=["A"], narrators=["N"], isbn="9780000000007")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Should not raise
+        reporter.stop()
+
+    def test_stop_before_any_download_is_safe(self):
+        """stop() is safe even when no downloads were started (_progress may be None)."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = DownloadReporter(stdout=mock_tty)
+        # _progress is None — haven't started any download yet
+        reporter.stop()  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # Test 8: Summary line — correct counts after mixed results
 # ---------------------------------------------------------------------------
 

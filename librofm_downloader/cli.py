@@ -1,6 +1,8 @@
 """CLI entry point — wire config → auth → fetch library → download → history."""
 
+import os
 import sys
+import threading
 from pathlib import Path
 
 from rich.console import Console
@@ -139,6 +141,7 @@ def run(
 
         # 5. Download loop with TTY-aware reporting
         reporter = DownloadReporter()
+        cancel_event = threading.Event()
         console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
 
         # --- Download loop (parallel via orchestrator — Issue #16) ---
@@ -154,6 +157,7 @@ def run(
                     format_strategy=config.format,
                     config=config,
                     progress=reporter.update,
+                    cancel_event=cancel_event,
                 )
             return _download_fn
 
@@ -162,6 +166,7 @@ def run(
             workers=resolved_workers,
             download_fn=_make_download_fn(),
             reporter=reporter,
+            cancel_event=cancel_event,
         )
 
         downloaded = result.downloaded_count
@@ -177,6 +182,9 @@ def run(
             failed_books=failed_books,
             skipped_books=skipped_books,
         )
+
+        if result.interrupted:
+            return 130
 
         if verbose:
             console.print("[dim]── done ────────────────────────────────────────[/dim]")
@@ -214,14 +222,21 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    sys.exit(run(
+    exit_code = run(
         config_path=args.config,
         secrets_path=args.secrets,
         history_path=args.history,
         verbose=args.verbose,
         limit=args.limit,
         workers=args.workers,
-    ))
+    )
+    if exit_code == 130:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        finally:
+            os._exit(130)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

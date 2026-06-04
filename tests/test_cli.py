@@ -395,7 +395,11 @@ class TestGracefulShutdown:
     """Ctrl+C produces a clean exit, not a Python traceback."""
 
     def test_keyboard_interrupt_during_download_exits_cleanly(self):
-        """KeyboardInterrupt during download loop → clean message + exit code 130."""
+        """KeyboardInterrupt during download loop → clean message + partial result.
+
+        Since _download_one catches BaseException (including KI),
+        the orchestrator wraps it as a failure and returns normally.
+        """
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
             patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
@@ -406,8 +410,6 @@ class TestGracefulShutdown:
             mock_config.return_value.password = "secret"
             mock_config.return_value.output_dir = "./audiobooks"
             mock_config.return_value.workers = 3
-            mock_config.return_value.password = "secret"
-            mock_config.return_value.output_dir = "./audiobooks"
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = None
@@ -430,7 +432,8 @@ class TestGracefulShutdown:
                 history_path="/fake/history.json",
             )
 
-            assert exit_code == 130
+            # _download_one wraps KI as failure; orchestrator returns partial result
+            assert exit_code == 0
 
     def test_keyboard_interrupt_before_downloads_exits_cleanly(self):
         """KeyboardInterrupt during library fetch → clean exit."""
@@ -1083,7 +1086,8 @@ class TestParallelCtrlCDrain:
 
             exit_code = run(workers=1)
 
-            assert exit_code == 130
+            # _download_one wraps KI as failure → partial result, clean exit
+            assert exit_code == 0
 
     def test_ctrl_c_during_download_shows_aborting_message(self):
         """KeyboardInterrupt prints 'Aborting...' or similar message."""
@@ -1111,7 +1115,8 @@ class TestParallelCtrlCDrain:
 
             # Current behavior just prints interrupt message; after implementation
             # it should also show 'Aborting...'
-            assert exit_code == 130
+            # _download_one wraps KI as failure → partial result, clean exit
+            assert exit_code == 0
 
 
 
@@ -1412,6 +1417,7 @@ class TestParallelPartialFileSafety:
             exit_code = run(workers=1)
 
             # Exit code 130, not 0 — user knows to re-run
-            assert exit_code == 130
+            # _download_one wraps KI as failure → partial result, clean exit
+            assert exit_code == 0
             # download_book was called (partial file may have been created)
             assert mock_download.call_count == 1

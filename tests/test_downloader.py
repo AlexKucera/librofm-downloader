@@ -714,6 +714,146 @@ class TestDownloadM4B:
 
 
 # ---------------------------------------------------------------------------
+# Cooperative cancellation — download loops check cancel_event between chunks
+# ---------------------------------------------------------------------------
+
+
+class TestCooperativeCancellation:
+    """Download functions check cancel_event between chunks and exit promptly.
+
+    This is the fix for Ctrl+C downloading entire books: instead of waiting
+    for shutdown(wait=True) to complete full futures, each download loop checks
+    a threading.Event between 8 MB chunks and raises InterruptedDownload.
+    """
+
+    def test_m4b_raises_interrupted_when_cancelled_mid_download(self):
+        """download_m4b raises InterruptedDownload when cancel_event is set mid-stream.
+
+        Uses payload > CHUNK_SIZE (8 MB) so iter_bytes actually produces
+        multiple iterations, giving the cancel check a chance to fire.
+        """
+        import threading
+        import time
+
+        cancel_event = threading.Event()
+
+        # Payload must exceed CHUNK_SIZE (8 MB) for iter_bytes to chunk it
+        from librofm_downloader.downloader import CHUNK_SIZE
+        payload = b"X" * (CHUNK_SIZE + 1024)  # 8 MB + 1 KB → 2 iterations
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=payload,
+                headers={"content-length": str(len(payload))},
+            )
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "cancelled.m4b"
+
+            # Set cancel from another thread after a brief delay
+            # (gives time for first chunk to start processing)
+            def set_cancel_soon():
+                time.sleep(0)  # yield to ensure thread runs before download starts
+                cancel_event.set()
+
+            t = threading.Thread(target=set_cancel_soon, daemon=True)
+            t.start()
+
+            from librofm_downloader.downloader import InterruptedDownload
+
+            with pytest.raises(InterruptedDownload):
+                download_m4b(
+                    url="https://cdn.example.com/slow.m4b",
+                    output_path=output_path,
+                    transport=transport,
+                    cancel_event=cancel_event,
+                )
+
+            t.join(timeout=2)
+            # File should NOT be renamed to .m4b (only .partial remains)
+            assert not output_path.exists(), (
+                "Cancelled download should not produce final file"
+            )
+
+    def test_zip_part_raises_interrupted_when_cancelled(self):
+        """download_zip_part raises InterruptedDownload when cancel_event is set.
+
+        Uses valid ZIP payload > CHUNK_SIZE so iter_bytes chunks it,
+        giving the cancel check a chance to fire mid-stream.
+        """
+        import threading
+        import time
+        import zipfile as _zipfile
+        import io
+
+        cancel_event = threading.Event()
+
+        # Create valid ZIP content larger than CHUNK_SIZE (8 MB)
+        from librofm_downloader.downloader import CHUNK_SIZE
+        zip_buf = io.BytesIO()
+        with _zipfile.ZipFile(zip_buf, "w") as zf:
+            # Write enough data to exceed 8 MB
+            zf.writestr("test.txt", "x" * (CHUNK_SIZE + 1024))
+        valid_zip_data = zip_buf.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=valid_zip_data,
+                headers={"content-length": str(len(valid_zip_data))},
+            )
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            def set_cancel_soon():
+                time.sleep(0)  # yield to ensure thread runs before download starts
+                cancel_event.set()
+
+            t = threading.Thread(target=set_cancel_soon, daemon=True)
+            t.start()
+
+            from librofm_downloader.downloader import InterruptedDownload
+
+            with pytest.raises(InterruptedDownload):
+                download_zip_part(
+                    url="https://cdn.example.com/part.zip",
+                    output_dir=tmpdir,
+                    transport=transport,
+                    cancel_event=cancel_event,
+                )
+
+            t.join(timeout=2)
+            # ZIP should NOT have been extracted (extraction happens after download loop)
+            extracted_files = list(Path(tmpdir).iterdir())
+            assert not any(f.suffix == ".txt" for f in extracted_files), (
+                "ZIP should NOT have been extracted after cancellation"
+            )
+    def test_no_cancel_event_means_normal_behavior(self):
+        """cancel_event=None (default) downloads normally without interruption."""
+
+        payload = b"normal-download-data" * 3
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "normal.m4b"
+            result = download_m4b(
+                url="https://cdn.example.com/normal.m4b",
+                output_path=output_path,
+                transport=transport,
+                cancel_event=None,  # explicit None = no cancellation
+            )
+
+            assert result == output_path
+            assert output_path.read_bytes() == payload
+# ---------------------------------------------------------------------------
 # Orchestration: resolve path → query M4B → download → update history
 # ---------------------------------------------------------------------------
 

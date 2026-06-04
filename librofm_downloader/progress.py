@@ -37,6 +37,9 @@ class PlainTextReporter:
         detail = f" ({reason})" if reason else ""
         self._print(f"Failed: {authors} - {book.title} [{book.isbn}]{detail}")
 
+    def stop(self) -> None:
+        """No-op for plain text mode — nothing to stop."""
+
     def update(self, completed: int, *, total: int | None = None) -> None:
         """No-op progress update — plain text mode has no progress bar."""
 
@@ -147,6 +150,15 @@ class ProgressReporter:
         if total is not None:
             kwargs["total"] = total
         self._progress.update(task_id, **kwargs)
+
+    def stop(self) -> None:
+        """Stop the live progress display.
+
+        Must be called before printing any output outside the progress system,
+        e.g. in KeyboardInterrupt/exception handlers, to prevent display corruption.
+        """
+        if self._progress is not None:
+            self._progress.stop()
 
     def complete(self, book) -> None:
         """Mark this book's progress bar as complete and remove it."""

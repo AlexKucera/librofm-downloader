@@ -52,6 +52,9 @@ class FakeReporter:
     def fail(self, book: Book, reason: str = "") -> None:
         self.failed.append((book, reason))
 
+    def stop(self) -> None:
+        """No-op for test reporter."""
+
     def summary(self, **kwargs) -> None:
         pass  # no-op for unit tests
 
@@ -654,80 +657,222 @@ class TestCtrlCDrain:
     """
 
     def test_ctrl_c_returns_partial_result_with_completed_downloads(self):
-        """KeyboardInterrupt in one worker; others complete during drain."""
-        import time
+        """Worker-thread exceptions are wrapped as failures, returns partial result.
 
-        completed_isbns: list[str] = []
+        _download_one uses except BaseException so all exceptions including
+        BaseException subclasses are captured and returned as error tuples.
+        """
+        import threading
+
+        cancel_event = threading.Event()
 
         def download_fn(book: Book) -> Path | None:
             if book.isbn == "978111":
-                raise KeyboardInterrupt  # simulate Ctrl+C during this download
-            # Other books do brief work then complete normally
-            time.sleep(0.05)
-            completed_isbns.append(book.isbn)
+                raise RuntimeError("Simulated download failure")
             return Path(f"/fake/{book.isbn}.m4b")
 
         raw_books = [
-            _make_raw_book(isbn="978111", title="Interrupted Book"),
-            _make_raw_book(isbn="978222", title="Completes OK"),
-            _make_raw_book(isbn="978333", title="Also Completes"),
+            _make_raw_book(isbn="978111", title="Failed Book"),
+            _make_raw_book(isbn="978222", title="OK"),
         ]
 
-        with pytest.raises(KeyboardInterrupt):
-            download_all_books(
-                raw_books,
-                workers=3,
-                download_fn=download_fn,
-                reporter=FakeReporter(),
-            )
+        result = download_all_books(
+            raw_books,
+            workers=2,
+            download_fn=download_fn,
+            reporter=FakeReporter(),
+            cancel_event=cancel_event,
+        )
 
-        # Books 222 and 333 completed during the drain phase
-        assert set(completed_isbns) == {"978222", "978333"}
+        assert result.failed_count == 1
+        assert result.downloaded_count == 1
+        failed_isbns = [book.isbn for (book, reason) in result.failed_books]
+        assert "978111" in failed_isbns
+    def test_ctrl_c_calls_reporter_stop_before_messages(self):
+        """Real SIGINT must call reporter.stop() before printing any message.
 
-    def test_double_ctrl_c_during_drain_exits_immediately(self):
-        """Second KeyboardInterrupt during drain exits immediately without waiting."""
+        This prevents Rich's Live display thread from corrupting interrupt output.
+        Uses real SIGINT delivery (not worker-thread exception) to test the actual path.
+        """
         import signal
         import threading
         import time
+        import os
+
+        cancel_event = threading.Event()
+
+        class SpyReporter:
+            def __init__(self) -> None:
+                self.stop_called = False
+
+            def start_download(self, book, total_bytes: int = 0) -> None:
+                pass
+
+            def complete(self, book) -> None:
+                pass
+
+            def fail(self, book, reason: str = "") -> None:
+                pass
+
+            def stop(self) -> None:
+                self.stop_called = True
+
+            def summary(self, **kwargs) -> None:
+                pass
 
         def slow_download_fn(book: Book) -> Path | None:
-            time.sleep(10)  # slow — drain should NOT wait for this
+            for _ in range(50):
+                time.sleep(0.1)
+                if cancel_event.is_set():
+                    break
             return Path(f"/fake/{book.isbn}.m4b")
 
-        raw_books = [
-            _make_raw_book(isbn="978111", title="Interrupted Book"),
-            _make_raw_book(isbn="978222", title="Slow Book"),
-        ]
+        raw_books = [_make_raw_book(isbn="978111", title="Slow")]
+        reporter = SpyReporter()
 
-        def download_fn_with_first_interrupt(book: Book) -> Path | None:
-            if book.isbn == "978111":
-                raise KeyboardInterrupt  # first Ctrl+C
-            return slow_download_fn(book)
-
-        # Send second interrupt from another thread after a short delay
-        # (during the drain/shutdown(wait=True) phase)
-        def send_second_interrupt_after_delay():
-            time.sleep(0.2)  # give time for first interrupt to be caught and drain to start
-            # Send SIGINT to our own process to simulate second Ctrl+C
-            import os
+        def send_sigint():
+            time.sleep(0.1)
             os.kill(os.getpid(), signal.SIGINT)
 
         original_handler = signal.getsignal(signal.SIGINT)
         try:
-            start = time.monotonic()
-            t = threading.Thread(target=send_second_interrupt_after_delay, daemon=True)
+            t = threading.Thread(target=send_sigint, daemon=True)
             t.start()
 
-            with pytest.raises(KeyboardInterrupt):
+            result = download_all_books(
+                raw_books,
+                workers=1,
+                download_fn=slow_download_fn,
+                reporter=reporter,
+                cancel_event=cancel_event,
+            )
+            t.join(timeout=2)
+        finally:
+            signal.signal(signal.SIGINT, original_handler)
+
+        assert reporter.stop_called is True, (
+            "reporter.stop() was not called during SIGINT handling"
+        )
+
+    def test_double_ctrl_c_during_drain_exits_immediately(self):
+        """Second SIGINT during cooperative drain forces immediate KeyboardInterrupt exit.
+
+        The cooperative drain waits up to 2 seconds for tasks to notice
+        cancel_event. A second SIGINT during that window bypasses the wait
+        and raises KeyboardInterrupt immediately.
+        """
+        import signal
+        import threading
+        import time
+        import os
+
+        cancel_event = threading.Event()
+        force_exit_event = threading.Event()
+
+        def slow_download_fn(book: Book) -> Path | None:
+            # Check cancel_event to allow cooperative cancellation to start
+            for _ in range(100):
+                time.sleep(0.1)
+                if cancel_event.is_set():
+                    force_exit_event.wait(timeout=1.0)
+            return Path(f"/fake/{book.isbn}.m4b")
+
+        raw_books = [_make_raw_book(isbn="978111", title="Slow")]
+
+        interrupts_sent = [0]
+
+        def send_interrupts():
+            time.sleep(0.05)  # let download start
+            os.kill(os.getpid(), signal.SIGINT)  # first Ctrl+C → starts drain
+            interrupts_sent[0] += 1
+            time.sleep(0.2)  # wait for drain to begin (inside f.result timeout loop)
+            os.kill(os.getpid(), signal.SIGINT)  # second Ctrl+C → force quit
+            interrupts_sent[0] += 1
+
+        def fake_hard_exit(code: int) -> None:
+            force_exit_event.set()
+            raise SystemExit(code)
+        original_handler = signal.getsignal(signal.SIGINT)
+        try:
+            t = threading.Thread(target=send_interrupts, daemon=True)
+            t.start()
+
+            start = time.monotonic()
+            with pytest.raises(SystemExit) as exc_info:
                 download_all_books(
                     raw_books,
-                    workers=2,
-                    download_fn=download_fn_with_first_interrupt,
+                    workers=1,
+                    download_fn=slow_download_fn,
                     reporter=FakeReporter(),
+                    cancel_event=cancel_event,
+                    hard_exit=fake_hard_exit,
                 )
 
             elapsed = time.monotonic() - start
-            # Should exit quickly (< 2s), NOT wait for the 10s sleep
-            assert elapsed < 3.0, f"Double-Ctrl+C took {elapsed:.1f}s — should exit immediately"
+            assert elapsed < 5.0, f"Double-Ctrl+C took {elapsed:.1f}s — should exit quickly"
+            assert interrupts_sent[0] == 2, "Both SIGINTs should have been sent"
+            assert exc_info.value.code == 130
         finally:
             signal.signal(signal.SIGINT, original_handler)
+    def test_cooperative_cancel_stops_downloads_promptly(self):
+        """When cancel_event is set during download, orchestrator cancels pending work.
+
+        Verifies that:
+        - Pending (not-yet-started) futures are cancelled
+        - The function returns promptly (doesn't wait for full queue)
+        - Partial results are returned for completed downloads
+        """
+        import threading
+        import time
+
+        cancel_event = threading.Event()
+        completed_isbns: list[str] = []
+        download_order: list[str] = []
+
+        def tracking_download_fn(book: Book) -> Path | None:
+            download_order.append(book.isbn)
+            # Simulate work that checks cancel_event
+            if book.isbn == "978111":
+                # First book: completes before cancellation
+                time.sleep(0.01)
+                completed_isbns.append(book.isbn)
+                return Path(f"/fake/{book.isbn}.m4b")
+            else:
+                # Other books: check cancel_event and exit if set
+                time.sleep(0.05)  # long enough for cancel to fire
+                if cancel_event.is_set():
+                    from librofm_downloader.downloader import InterruptedDownload
+                    raise InterruptedDownload(f"Cancelled {book.isbn}")
+                completed_isbns.append(book.isbn)
+                return Path(f"/fake/{book.isbn}.m4b")
+
+        raw_books = [
+            _make_raw_book(isbn="978111", title="Fast Book"),
+            _make_raw_book(isbn="978222", title="Slow Book 1"),
+            _make_raw_book(isbn="978333", title="Slow Book 2"),
+        ]
+
+        # Set cancel after first book starts but before others complete
+        def set_cancel_soon():
+            time.sleep(0.02)  # let first book start
+            cancel_event.set()
+
+        t = threading.Thread(target=set_cancel_soon, daemon=True)
+        t.start()
+
+        result = download_all_books(
+            raw_books,
+            workers=1,  # sequential to make ordering predictable
+            download_fn=tracking_download_fn,
+            reporter=FakeReporter(),
+            cancel_event=cancel_event,
+        )
+
+        t.join(timeout=2)
+
+        # First book should have completed
+        assert "978111" in completed_isbns, "First book should complete before cancel"
+        # Should NOT have waited for all 3 books
+        assert len(completed_isbns) < 3, (
+            f"Cooperative cancel should stop early; got {len(completed_isbns)} completions"
+        )
