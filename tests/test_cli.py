@@ -676,6 +676,7 @@ class TestCLIHistoryResolution:
             mock_config.return_value.password = "secret"
             mock_config.return_value._config_path = None
             mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = "tok"
@@ -711,6 +712,7 @@ class TestCLIHistoryResolution:
             mock_config.return_value.password = "secret"
             mock_config.return_value._config_path = None
             mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = "tok"
@@ -737,6 +739,7 @@ class TestCLIHistoryResolution:
             mock_config.return_value.password = "secret"
             mock_config.return_value._config_path = None
             mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = "tok"

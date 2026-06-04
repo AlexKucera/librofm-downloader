@@ -43,12 +43,6 @@ class InvalidWorkersError(ConfigError):
 def _resolve_config_file(filename: str) -> Path | None:
     """Resolve a config file by searching XDG then CWD.
 
-
-def load_config(config_path: Path | str, secrets_path: Path | str) -> Config:
-    """Load config.yaml + secrets.yaml, merge, validate, and return Config."""
-    config_path = Path(config_path)
-    secrets_path = Path(secrets_path)
-
     Searches ``~/.config/librofm-downloader/`` first, then falls back to
     the current working directory.  Auto-creates the XDG parent directory
     on demand.
