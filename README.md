@@ -24,8 +24,11 @@ No Docker. No JVM. Just `pip install` and go.
 # 1. Install
 pip install librofm-downloader
 
-# 2. Configure
-cat > config.yaml << 'EOF'
+# 2. Create XDG config directory
+mkdir -p ~/.config/librofm-downloader
+
+# 3. Configure
+cat > ~/.config/librofm-downloader/config.yaml << 'EOF'
 librofm:
   format: m4b_mp3_fallback
   output_dir: ./audiobooks
@@ -33,13 +36,13 @@ librofm:
   download_covers: true
 EOF
 
-cat > secrets.yaml << 'EOF'
+cat > ~/.config/librofm-downloader/secrets.yaml << 'EOF'
 librofm:
   username: your-email@example.com
   password: your-password
 EOF
 
-# 3. Run
+# 4. Run
 librofm-downloader
 ```
 

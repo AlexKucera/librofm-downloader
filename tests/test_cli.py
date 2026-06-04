@@ -606,3 +606,226 @@ class TestAllBooksFailExitCode:
             # Individual failures are NOT fatal → exit 0
             assert exit_code == 0
             assert mock_download.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Issue #23: XDG path resolution wired into CLI
+# ---------------------------------------------------------------------------
+
+
+class TestCLIHistoryResolution:
+    """History path resolves via XDG → CWD when not explicitly provided."""
+
+    def test_history_defaults_to_xdg_location(self, tmp_path, monkeypatch):
+        """run() with history_path=None → history resolves to XDG path."""
+        xdg_dir = tmp_path / ".config" / "librofm-downloader"
+        xdg_dir.mkdir(parents=True)
+        (xdg_dir / "download_history.json").write_text("{}")
+
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(cwd)
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value._config_path = None
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = []
+
+            exit_code = run(
+                config_path=None,
+                secrets_path=None,
+                history_path=None,
+            )
+
+            assert exit_code == 0
+
+            # Verify DownloadHistory received the XDG path
+            history_arg = mock_history_cls.call_args[0][0]
+            assert "librofm-downloader" in str(history_arg)
+            assert "download_history.json" in str(history_arg)
+
+    def test_history_defaults_to_xdg_when_not_found_anywhere(self, tmp_path, monkeypatch):
+        """No download_history.json anywhere → defaults to XDG location."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(cwd)
+
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value._config_path = None
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = []
+
+            exit_code = run(history_path=None)
+
+            assert exit_code == 0
+
+            # Should default to XDG location even though file doesn't exist
+            history_arg = mock_history_cls.call_args[0][0]
+            assert "librofm-downloader" in str(history_arg)
+            assert ".config" in str(history_arg)
+            assert "download_history.json" in str(history_arg)
+
+    def test_explicit_history_path_bypasses_resolution(self, tmp_path, monkeypatch):
+        """Explicit --history flag uses the exact path provided."""
+        with (
+            patch("librofm_downloader.cli.load_config") as mock_config,
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value._config_path = None
+            mock_config.return_value.output_dir = "./audiobooks"
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = []
+
+            exit_code = run(history_path="/custom/my_history.json")
+
+            assert exit_code == 0
+
+            history_arg = mock_history_cls.call_args[0][0]
+            assert str(history_arg) == "/custom/my_history.json"
+
+
+
+class TestCLIConfigResolutionMessages:
+    """CLI messages about config resolution."""
+
+    def test_missing_config_message_includes_searched_paths(self, tmp_path, monkeypatch, capsys):
+        """config.yaml not found → message lists XDG and CWD paths."""
+        xdg_dir = tmp_path / ".config" / "librofm-downloader"
+        xdg_dir.mkdir(parents=True)
+        (xdg_dir / "secrets.yaml").write_text(
+            "librofm:\n  username: alice\n  password: secret\n"
+        )
+
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(cwd)
+
+        with (
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.download_book"),
+        ):
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = []
+
+            exit_code = run(config_path=None, secrets_path=None, history_path=None)
+
+            assert exit_code == 0
+            output = capsys.readouterr().out
+            assert "config.yaml not found" in output
+            assert ".config" in output or "librofm-downloader" in output
+            assert "Using built-in defaults" in output
+
+    def test_verbose_shows_resolved_paths(self, tmp_path, monkeypatch, capsys):
+        """--verbose shows the actual resolved file paths after loading config."""
+        xdg_dir = tmp_path / ".config" / "librofm-downloader"
+        xdg_dir.mkdir(parents=True)
+        (xdg_dir / "secrets.yaml").write_text(
+            "librofm:\n  username: alice\n  password: secret\n"
+        )
+        (xdg_dir / "download_history.json").write_text("{}")
+
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(cwd)
+
+        with (
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.download_book"),
+        ):
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = []
+
+            exit_code = run(
+                config_path=None,
+                secrets_path=None,
+                history_path=None,
+                verbose=True,
+            )
+
+            assert exit_code == 0
+            output = capsys.readouterr().out.lower()
+            # Verbose should show the resolved XDG paths
+            assert "secrets" in output
+            assert "history" in output
+            assert "librofm-downloader" in output
+
+
+
+class TestCLIMissingFilesErrors:
+    """Error handling when files are missing."""
+
+    def test_empty_home_clean_secrets_error(self, tmp_path, monkeypatch, capsys):
+        """No files anywhere → clean error about missing secrets, exit 1."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(cwd)
+
+        exit_code = run(config_path=None, secrets_path=None, history_path=None)
+
+        assert exit_code == 1
+        output = capsys.readouterr().out
+        assert "secrets.yaml" in output
+        assert "Traceback" not in output
+
+    def test_only_secrets_in_xdg_works(self, tmp_path, monkeypatch, capsys):
+        """Secrets in XDG only → defaults work, 'using built-in defaults' message visible."""
+        xdg_dir = tmp_path / ".config" / "librofm-downloader"
+        xdg_dir.mkdir(parents=True)
+        (xdg_dir / "secrets.yaml").write_text(
+            "librofm:\n  username: alice\n  password: secret\n"
+        )
+
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(cwd)
+
+        with (
+            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.download_book"),
+        ):
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = []
+
+            exit_code = run(config_path=None, secrets_path=None, history_path=None)
+
+            assert exit_code == 0
+            output = capsys.readouterr().out
+            assert "Using built-in defaults" in output
