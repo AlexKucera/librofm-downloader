@@ -19,7 +19,7 @@ from librofm_downloader.downloader import (
     download_book,
     download_accompanying_files,
 )
-from librofm_downloader.client import LibroFmClient
+from librofm_downloader.session import LibroFmSession
 from librofm_downloader.history import DownloadHistory
 
 
@@ -884,8 +884,8 @@ class TestDownloadBook:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(
             title="History Test Book",
@@ -927,8 +927,8 @@ class TestDownloadBook:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(
             title="No M4B Book",
@@ -974,8 +974,8 @@ class TestDownloadBook:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(
             title="Fail Book",
@@ -1016,8 +1016,8 @@ class TestDownloadBook:
             return httpx.Response(200, content=payload)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(
             title="Standalone Book",
@@ -1092,8 +1092,8 @@ class TestFormatStrategy:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(title="M4B Available", authors=["A"], narrators=["N"], isbn="9781111111111")
 
@@ -1151,8 +1151,8 @@ class TestFormatStrategy:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(title="MP3 Fallback Book", authors=["A"], narrators=["N"], isbn="9782222222222")
 
@@ -1212,8 +1212,8 @@ class TestFormatStrategy:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(title="MP3 Only Book", authors=["A"], narrators=["N"], isbn="9783333333333")
 
@@ -1261,8 +1261,8 @@ class TestFormatStrategy:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(title="No M4B Skip", authors=["A"], narrators=["N"], isbn="9780000000000")
 

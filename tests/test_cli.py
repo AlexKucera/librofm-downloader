@@ -14,7 +14,7 @@ class TestCLIHappyPath:
         """Happy path: valid config, auth succeeds, books are printed."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
         ):
             # Config returns valid credentials
             mock_config.return_value.username = "alice"
@@ -47,11 +47,11 @@ class TestCLIAuthFailure:
 
     def test_exits_one_on_auth_failure(self, capsys):
         """Auth fails → exit code 1 + error message printed."""
-        from librofm_downloader.client import AuthError
+        from librofm_downloader.session import AuthError
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "wrong"
@@ -79,7 +79,7 @@ class TestCLIHistoryFiltering:
         """Books in history file don't appear in output."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
         ):
             mock_config.return_value.username = "alice"
@@ -124,7 +124,7 @@ class TestCLIDownloadOrchestration:
         Books without M4B are skipped (not errors)."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
             patch("librofm_downloader.cli.Book") as mock_book_cls,
@@ -182,7 +182,7 @@ class TestCLIVerbose:
         """--verbose shows config values and auth status."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
             patch("librofm_downloader.cli.Book") as mock_book_cls,
@@ -234,7 +234,7 @@ class TestCLILimitFlag:
         """--limit 2 → only first 2 books are attempted."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
             patch("librofm_downloader.cli.Book") as mock_book_cls,
@@ -273,7 +273,7 @@ class TestCLILimitFlag:
         """--limit 0 (default) → all books are processed."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
             patch("librofm_downloader.cli.Book") as mock_book_cls,
@@ -312,7 +312,7 @@ class TestCLIFormatWiring:
         """config.format is forwarded to download_book(format_strategy=...)."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
             patch("librofm_downloader.cli.Book") as mock_book_cls,
@@ -350,7 +350,7 @@ class TestCLIFormatWiring:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
             patch("librofm_downloader.cli.Book") as mock_book_cls,
@@ -402,7 +402,7 @@ class TestGracefulShutdown:
         """
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -439,7 +439,7 @@ class TestGracefulShutdown:
         """KeyboardInterrupt during library fetch → clean exit."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
@@ -472,7 +472,7 @@ class TestIntegrationHappyPath:
         """Full pipeline: auth + library fetch + 3 downloads → exit 0 + summary."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -513,7 +513,7 @@ class TestIntegrationMixedResult:
         """2 download (1 M4B, 1 MP3), 1 skipped, 1 fails → summary lists all + exit 0."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -570,11 +570,11 @@ class TestIntegrationFatalAuthFailure:
 
     def test_auth_failure_returns_exit_code_1_no_downloads(self, capsys):
         """Authentication failure → exit code 1, download_book never called."""
-        from librofm_downloader.client import AuthError
+        from librofm_downloader.session import AuthError
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
             mock_config.return_value.username = "baduser"
@@ -608,7 +608,7 @@ class TestAllBooksFailExitCode:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -672,7 +672,7 @@ class TestCLIHistoryResolution:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
         ):
             mock_config.return_value.username = "alice"
@@ -708,7 +708,7 @@ class TestCLIHistoryResolution:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
         ):
             mock_config.return_value.username = "alice"
@@ -735,7 +735,7 @@ class TestCLIHistoryResolution:
         """Explicit --history flag uses the exact path provided."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
         ):
             mock_config.return_value.username = "alice"
@@ -775,7 +775,7 @@ class TestCLIConfigResolutionMessages:
         monkeypatch.chdir(cwd)
 
         with (
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.download_book"),
         ):
             mock_instance = mock_client_cls.return_value
@@ -806,7 +806,7 @@ class TestCLIConfigResolutionMessages:
         monkeypatch.chdir(cwd)
 
         with (
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.download_book"),
         ):
             mock_instance = mock_client_cls.return_value
@@ -862,7 +862,7 @@ class TestCLIMissingFilesErrors:
         monkeypatch.chdir(cwd)
 
         with (
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.download_book"),
         ):
             mock_instance = mock_client_cls.return_value
@@ -888,7 +888,7 @@ class TestCLIWorkersFlag:
         """--workers 8 overrides config.workers=3 → resolved workers = 8."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -919,7 +919,7 @@ class TestCLIWorkersFlag:
         """No --workers flag uses config.workers (5) instead of default 3."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -948,7 +948,7 @@ class TestCLIWorkersFlag:
         """--workers 1 is accepted (sequential fallback)."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -993,7 +993,7 @@ class TestParallelWorkers1Parity:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1029,7 +1029,7 @@ class TestParallelWorkers1Parity:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1066,7 +1066,7 @@ class TestParallelCtrlCDrain:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1093,7 +1093,7 @@ class TestParallelCtrlCDrain:
         """KeyboardInterrupt prints 'Aborting...' or similar message."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1131,7 +1131,7 @@ class TestParallelSummaryOrdering:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1173,7 +1173,7 @@ class TestParallelSummaryOrdering:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
             patch("librofm_downloader.cli.DownloadReporter") as mock_reporter_cls,
@@ -1227,7 +1227,7 @@ class TestParallelConcurrency:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1267,7 +1267,7 @@ class TestParallelConcurrency:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1317,7 +1317,7 @@ class TestParallelVerboseMode:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1349,7 +1349,7 @@ class TestParallelVerboseMode:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -1396,7 +1396,7 @@ class TestParallelPartialFileSafety:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):

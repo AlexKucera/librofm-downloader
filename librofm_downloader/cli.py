@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from librofm_downloader.config import load_config, ConfigError, _resolve_config_file
-from librofm_downloader.client import LibroFmClient, AuthError
+from librofm_downloader.session import LibroFmSession, AuthError
 from librofm_downloader.history import DownloadHistory
 from librofm_downloader.book import Book
 from librofm_downloader.downloader import download_book
@@ -96,7 +96,7 @@ def run(
         if verbose:
             console.print("[dim]── auth ────────────────────────────────────────[/dim]")
 
-        client = LibroFmClient(
+        client = LibroFmSession(
             username=config.username,
             password=config.password,
         )

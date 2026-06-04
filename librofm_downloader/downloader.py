@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 from librofm_downloader.book import Book
-from librofm_downloader.client import M4BUnavailableError
+from librofm_downloader.session import M4BUnavailableError
 from librofm_downloader.history import HistoryEntry
 from librofm_downloader.path import (
     _resolve_output_dir,
@@ -215,7 +215,7 @@ def download_m4b(
 
 def download_book(
     book: Book,
-    client: "LibroFmClient",
+    client: "LibroFmSession",
     output_base: Path | str,
     history: "DownloadHistory",
     format_strategy: str = "m4b_mp3_fallback",
@@ -228,7 +228,7 @@ def download_book(
 
     Args:
         book: The book metadata.
-        client: Authenticated LibroFmClient instance.
+        client: Authenticated LibroFmSession instance.
         output_base: Base directory for downloads.
         history: DownloadHistory instance to record successful downloads.
         format_strategy: One of ``m4b_mp3_fallback``, ``mp3_only``, ``m4b_only``.
@@ -247,7 +247,7 @@ def download_book(
     if format_strategy == "m4b_mp3_fallback":
         # Try M4B first
         try:
-            m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
+            m4b_url = client.fetch_m4b_url(book.isbn)
             title_sanitized = sanitize(book.title)
             m4b_path = output_dir / f"{title_sanitized}.m4b"
             result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
@@ -274,7 +274,7 @@ def download_book(
     # --- m4b_only: skip book if M4B unavailable ---
     if format_strategy == "m4b_only":
         try:
-            m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
+            m4b_url = client.fetch_m4b_url(book.isbn)
             title_sanitized = sanitize(book.title)
             m4b_path = output_dir / f"{title_sanitized}.m4b"
             result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
@@ -291,7 +291,7 @@ def download_book(
 
 def _download_mp3(
     book: Book,
-    client: "LibroFmClient",
+    client: "LibroFmSession",
     output_dir: Path,
     history: "DownloadHistory",
     transport: httpx.BaseTransport | None = None,
@@ -300,7 +300,7 @@ def _download_mp3(
 ) -> Path | None:
     """Fetch MP3 manifest and download all ZIP parts."""
     try:
-        manifest = client.fetch_download_manifest(book.isbn, transport=transport)
+        manifest = client.fetch_download_manifest(book.isbn)
     except M4BUnavailableError:
         logger.warning("MP3 manifest not available for %s (%s), skipping", book.title, book.isbn)
         return None
@@ -351,7 +351,7 @@ def _download_cover(
 
     Returns Path on success, None on failure (logs warning).
     """
-    from librofm_downloader.client import LibroFmClient
+    from librofm_downloader.session import LibroFmSession
 
     filename = _cover_filename_from_url(url)
 
@@ -368,7 +368,7 @@ def _download_cover(
         client = httpx.Client(
             transport=transport,
             follow_redirects=True,
-            headers=LibroFmClient.DEFAULT_HEADERS,
+            headers=LibroFmSession.DEFAULT_HEADERS,
         )
         with client.stream("GET", url) as resp:
             resp.raise_for_status()
@@ -423,7 +423,7 @@ def download_accompanying_files(
     book: Book,
     output_dir: Path | str,
     config: "Config",
-    client: "LibroFmClient | None" = None,
+    client: "LibroFmSession | None" = None,
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
 ) -> list[Path]:
@@ -435,13 +435,13 @@ def download_accompanying_files(
         book: The book metadata.
         output_dir: Directory where accompanying files are placed.
         config: Config with download_extras / download_covers toggles.
-        client: Optional LibroFmClient for fetching PDF URLs.
+        client: Optional LibroFmSession for fetching PDF URLs.
         transport: Optional httpx transport override for testing.
 
     Returns:
         List of Paths successfully downloaded.
     """
-    from librofm_downloader.client import LibroFmClient
+    from librofm_downloader.session import LibroFmSession
 
     output_dir = Path(output_dir)
     downloaded: list[Path] = []
@@ -455,7 +455,7 @@ def download_accompanying_files(
     # Download PDF extras if enabled and available
     if config.download_extras and book.pdf_extras and client is not None:
         try:
-            pdf_url = client.fetch_pdf_extra_url(book.isbn, "map.pdf", transport=transport)
+            pdf_url = client.fetch_pdf_extra_url(book.isbn, "map.pdf")
             if pdf_url:
                 result = _download_pdf(pdf_url, "map.pdf", output_dir, transport=transport)
                 if result:

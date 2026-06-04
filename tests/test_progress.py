@@ -157,7 +157,7 @@ class TestFailureIsolationCLI:
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
@@ -218,11 +218,11 @@ class TestFatalVsBookLevel:
     def test_auth_failure_exits_one_before_downloads(self, capsys):
         """Auth failure → exit 1, download_book never called."""
         from unittest.mock import patch
-        from librofm_downloader.client import AuthError
+        from librofm_downloader.session import AuthError
 
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
+            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
         ):
             mock_config.return_value.username = "alice"
@@ -663,7 +663,7 @@ class TestProgressCallbackWiring:
         from pathlib import Path
         from librofm_downloader.book import Book
         from librofm_downloader.downloader import download_book
-        from librofm_downloader.client import LibroFmClient
+        from librofm_downloader.session import LibroFmSession
         from librofm_downloader.history import DownloadHistory
 
         m4b_payload = b"callback-test-data" * 10  # 160 bytes
@@ -681,8 +681,8 @@ class TestProgressCallbackWiring:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(title="CB Test", authors=["A"], narrators=["N"], isbn="9781111111111")
         progress_calls: list[int] = []
