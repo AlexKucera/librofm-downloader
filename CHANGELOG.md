@@ -5,9 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+8:6af|## [Unreleased]
 
-### Fixed
+
+### Refactored
+
+- **session:** Rename LibroFmClient → LibroFmSession, relocate to
+  session.py, inject transport at construction time. Old client.py is now
+  a deprecated re-export shim. Endpoint signatures slimmed from 4-5 params
+  to ≤3 (transport removed). 227 tests pass (+17 new). Closes #27.
+
+
+10:9bb|### Fixed
 - **progress:** Wire task_id through parallel progress callback.
   All concurrent download updates went to the same (most recently started) bar
   because `task_id` was never threaded from `start_download()` to `update()`.
