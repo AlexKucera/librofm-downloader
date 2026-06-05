@@ -2971,3 +2971,204 @@ class TestStreamToFile:
 
             # No final file should exist after an HTTP error
             assert not final_path.exists()
+
+
+class TestFinalizeDownload:
+    """_finalize_download() consolidates post-download rename/accompany/return logic."""
+
+    def test_m4b_path_returns_download_result_and_downloads_accompanying(self):
+        """M4B format: downloads accompanying files and returns downloaded DownloadResult."""
+        cover_payload = b"fake-cover-jpeg"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=cover_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        session = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        session.authenticate()
+
+        book = Book(
+            title="Test Book", authors=["Author"], narrators=["Narrator"],
+            isbn="9781111111111", cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        from librofm_downloader.config import Config
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            config = Config(
+                username="u", password="p", format="m4b_only",
+                output_dir=str(base_dir), download_covers=True, download_extras=False,
+                rename_chapters=False,
+            )
+            plan = resolve_output_plan(book, base_dir, config=config, format_strategy="m4b_only")
+            result_path = plan.audio_path
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_bytes(b"fake-m4b")
+
+            reporter = DownloadReporter()
+
+            from librofm_downloader.downloader import _finalize_download
+
+            result = _finalize_download(
+                result_path=result_path,
+                format="m4b",
+                book=book,
+                plan=plan,
+                session=session,
+                transport=transport,
+                reporter=reporter,
+            )
+
+            assert result.status == "downloaded"
+            assert result.path == result_path
+            assert result.format == "m4b"
+            # Cover was downloaded to plan.cover_path
+            assert plan.cover_path is not None
+            assert plan.cover_path.exists()
+
+    def test_mp3_path_with_rename_chapters_renames_and_returns_result(self):
+        """MP3 format + rename_chapters=True: renames files then returns downloaded result."""
+        from unittest.mock import MagicMock
+        from librofm_downloader.config import Config
+
+        session = MagicMock(spec=LibroFmSession)
+        transport = MagicMock(spec=httpx.BaseTransport)
+
+        book = Book(title="My Book", authors=["A"], narrators=["N"], isbn="9780000000001")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "out"
+            config = Config(
+                username="u", password="p", format="mp3_only",
+                output_dir=str(base_dir), download_covers=False, download_extras=False,
+                rename_chapters=True,
+            )
+            plan = resolve_output_plan(book, base_dir, config=config, format_strategy="mp3_only")
+
+            # Create fake MP3 directory with track files
+            audio_dir = plan.audio_path.parent
+            audio_dir.mkdir(parents=True)
+            tracks = [
+                {"title": "Chapter 1", "file": "01.mp3", "number": 1},
+                {"title": "Chapter 2", "file": "02.mp3", "number": 2},
+            ]
+            for t in tracks:
+                (audio_dir / t["file"]).write_bytes(b"fake-mp3")
+
+            reporter = DownloadReporter()
+
+            from librofm_downloader.downloader import _finalize_download
+
+            result = _finalize_download(
+                result_path=audio_dir,  # MP3 returns dir path
+                format="mp3",
+                book=book,
+                plan=plan,
+                session=session,
+                transport=transport,
+                rename_chapters=True,
+                reporter=reporter,
+                mp3_tracks=tracks,
+            )
+
+            assert result.status == "downloaded"
+            assert result.path == audio_dir
+            assert result.format == "mp3"
+            # Files were renamed (01.mp3 → "1 - My Book - Chapter 1.mp3")
+            renamed_files = sorted(audio_dir.iterdir())
+            assert len(renamed_files) == 2
+            assert any("Chapter 1" in f.name for f in renamed_files)
+            assert any("Chapter 2" in f.name for f in renamed_files)
+
+    def test_mp3_path_without_rename_chapters_skips_rename(self):
+        """MP3 format + rename_chapters=False: does NOT rename files."""
+        from unittest.mock import MagicMock
+        from librofm_downloader.config import Config
+
+        session = MagicMock(spec=LibroFmSession)
+        transport = MagicMock(spec=httpx.BaseTransport)
+
+        book = Book(title="My Book", authors=["A"], narrators=["N"], isbn="9780000000001")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "out"
+            config = Config(
+                username="u", password="p", format="mp3_only",
+                output_dir=str(base_dir), download_covers=False, download_extras=False,
+                rename_chapters=False,
+            )
+            plan = resolve_output_plan(book, base_dir, config=config, format_strategy="mp3_only")
+
+            audio_dir = plan.audio_path.parent
+            audio_dir.mkdir(parents=True)
+            # Original filenames should remain unchanged
+            (audio_dir / "01.mp3").write_bytes(b"fake")
+            (audio_dir / "02.mp3").write_bytes(b"fake")
+
+            reporter = DownloadReporter()
+
+            from librofm_downloader.downloader import _finalize_download
+
+            result = _finalize_download(
+                result_path=audio_dir,
+                format="mp3",
+                book=book,
+                plan=plan,
+                session=session,
+                transport=transport,
+                rename_chapters=False,
+                reporter=reporter,
+                mp3_tracks=[],
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+            # Files NOT renamed — original names preserved
+            remaining = sorted(audio_dir.iterdir())
+            assert len(remaining) == 2
+            assert "01.mp3" in [f.name for f in remaining]
+            assert "02.mp3" in [f.name for f in remaining]
+
+    def test_no_accompanying_files_skips_download_call(self):
+        """When cover_path and pdf_path are both None, download_accompanying_files is NOT called."""
+        from unittest.mock import MagicMock, patch
+
+        session = MagicMock(spec=LibroFmSession)
+        transport = MagicMock(spec=httpx.BaseTransport)
+
+        book = Book(title="Solo", authors=["A"], narrators=["N"], isbn="9780000000002")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "out"
+            # No config → cover_path and pdf_path are both None
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_only")
+            assert plan.cover_path is None
+            assert plan.pdf_path is None
+
+            result_path = plan.audio_path
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(b"fake-m4b")
+
+            with patch("librofm_downloader.downloader.download_accompanying_files") as mock_accompany:
+                from librofm_downloader.downloader import _finalize_download
+
+                result = _finalize_download(
+                    result_path=result_path,
+                    format="m4b",
+                    book=book,
+                    plan=plan,
+                    session=session,
+                    transport=transport,
+                )
+
+                assert result.status == "downloaded"
+                assert result.format == "m4b"
+                mock_accompany.assert_not_called()

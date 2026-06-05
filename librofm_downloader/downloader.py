@@ -258,31 +258,33 @@ def download_book(
         try:
             m4b_url = session.fetch_m4b_url(book.isbn)
             result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            if plan.cover_path is not None or plan.pdf_path is not None:
-                download_accompanying_files(book, plan, client=session, transport=transport)
-            return DownloadResult(status="downloaded", path=result_path, format="m4b")
+            return _finalize_download(
+                result_path=result_path, format="m4b",
+                book=book, plan=plan, session=session, transport=transport,
+                reporter=reporter,
+            )
         except M4BUnavailableError:
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
         # Fall back to MP3
         result_path, mp3_tracks = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         if result_path:
-            if rename_chapters:
-                _rename_and_log(result_path, mp3_tracks, book.title, reporter)
-            if plan.cover_path is not None or plan.pdf_path is not None:
-                download_accompanying_files(book, plan, client=session, transport=transport)
-            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+            return _finalize_download(
+                result_path=result_path, format="mp3",
+                book=book, plan=plan, session=session, transport=transport,
+                rename_chapters=rename_chapters, reporter=reporter, mp3_tracks=mp3_tracks,
+            )
         return DownloadResult(status="skipped")
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
         result_path, mp3_tracks = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         if result_path:
-            if rename_chapters:
-                _rename_and_log(result_path, mp3_tracks, book.title, reporter)
-            if plan.cover_path is not None or plan.pdf_path is not None:
-                download_accompanying_files(book, plan, client=session, transport=transport)
-            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+            return _finalize_download(
+                result_path=result_path, format="mp3",
+                book=book, plan=plan, session=session, transport=transport,
+                rename_chapters=rename_chapters, reporter=reporter, mp3_tracks=mp3_tracks,
+            )
         return DownloadResult(status="skipped")
 
     # --- m4b_only: skip book if M4B unavailable ---
@@ -290,15 +292,45 @@ def download_book(
         try:
             m4b_url = session.fetch_m4b_url(book.isbn)
             result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            if plan.cover_path is not None or plan.pdf_path is not None:
-                download_accompanying_files(book, plan, client=session, transport=transport)
-            return DownloadResult(status="downloaded", path=result_path, format="m4b")
+            return _finalize_download(
+                result_path=result_path, format="m4b",
+                book=book, plan=plan, session=session, transport=transport,
+                reporter=reporter,
+            )
         except M4BUnavailableError:
             logger.info("Skipping %s (%s): no M4B available (m4b_only mode)", book.title, book.isbn)
             return DownloadResult(status="skipped")
 
     raise ValueError(f"Unknown format strategy: {format_strategy}")
 
+
+def _finalize_download(
+    result_path: Path,
+    format: str,
+    book: "Book",
+    plan: "OutputPlan",
+    session: "LibroFmSession",
+    transport: httpx.BaseTransport | None = None,
+    *,
+    rename_chapters: bool = False,
+    reporter: "DownloadReporter | None" = None,
+    mp3_tracks: list[dict] | None = None,
+) -> DownloadResult:
+    """Post-download finalization: rename chapters, accompany files, return success.
+
+    Consolidates the repeated success-path logic from all three format-strategy
+    branches in download_book().  Callers only need to attempt their download;
+    on success they delegate here for everything else.
+    """
+    # MP3-only: optionally rename chapter files
+    if format == "mp3" and rename_chapters:
+        _rename_and_log(result_path, mp3_tracks or [], book.title, reporter)
+
+    # Download accompanying files (cover art, PDF extras)
+    if plan.cover_path is not None or plan.pdf_path is not None:
+        download_accompanying_files(book, plan, client=session, transport=transport)
+
+    return DownloadResult(status="downloaded", path=result_path, format=format)
 
 
 def _rename_and_log(output_dir: Path, tracks: list[dict], book_title: str, reporter=None) -> None:
