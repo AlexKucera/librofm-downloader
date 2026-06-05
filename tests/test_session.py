@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import httpx
 import pytest
 
@@ -447,3 +450,253 @@ class TestFetchPdfExtraUrl:
 
         with pytest.raises(AuthError, match="Not authenticated"):
             session.fetch_pdf_extra_url("9781234567890", "map.pdf")
+
+
+
+# ---------------------------------------------------------------------------
+# API Rate Limiter — Issue #15 (migrated from test_client.py, Issue #37)
+# ---------------------------------------------------------------------------
+
+
+class TestApiRateLimiter:
+    """threading.Semaphore(3) caps concurrent Libro.fm API calls.
+
+    Applied to: fetch_m4b_url, fetch_download_manifest, fetch_pdf_extra_url.
+    NOT applied to: authenticate, fetch_library, CDN downloads.
+    """
+
+    def test_semaphore_blocks_at_capacity(self):
+        """4 concurrent callers: 3 proceed immediately, 4th blocks until one finishes."""
+
+        call_can_finish: threading.Event = threading.Event()
+        state_lock = threading.Lock()
+        state = {"in_flight": 0, "max_in_flight": 0}
+
+        def slow_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            with state_lock:
+                state["in_flight"] += 1
+                if state["in_flight"] > state["max_in_flight"]:
+                    state["max_in_flight"] = state["in_flight"]
+            call_can_finish.wait(timeout=5)
+            with state_lock:
+                state["in_flight"] -= 1
+            return httpx.Response(
+                200,
+                json={"m4b_url": "https://cdn.libro.fm/test.m4b"},
+            )
+
+        transport = httpx.MockTransport(slow_handler)
+        session = LibroFmSession(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+            transport=transport,
+        )
+        session.authenticate()
+
+        errors: list[BaseException] = []
+
+        def fetch_thread(isbn: str):
+            try:
+                session.fetch_m4b_url(isbn)
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=fetch_thread, args=(f"978{i}",))
+            for i in range(4)
+        ]
+        for t in threads:
+            t.start()
+
+        time.sleep(0.5)
+        call_can_finish.set()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"Unexpected errors: {errors}"
+        assert state["max_in_flight"] <= 3, (
+            f"Max in-flight was {state['max_in_flight']}, expected <= 3"
+        )
+
+    def test_semaphore_releases_on_exception(self):
+        """Semaphore is released even when the API call raises an exception."""
+        call_number = [1]  # Use list for mutability in closure
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            n = call_number[0]
+            call_number[0] += 1
+            if n == 2:
+                return httpx.Response(404)
+            return httpx.Response(
+                200,
+                json={"m4b_url": "https://cdn.libro.fm/test.m4b"},
+            )
+
+        transport = httpx.MockTransport(handler)
+        session = LibroFmSession(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+            transport=transport,
+        )
+        session.authenticate()
+
+        # First call should succeed (releases semaphore normally)
+        result = session.fetch_m4b_url("978111")
+        assert result == "https://cdn.libro.fm/test.m4b"
+
+        # Second call should raise (semaphore must still be released after this)
+        with pytest.raises(M4BUnavailableError):
+            session.fetch_m4b_url("978222")
+
+        # Third call should succeed — proves semaphore was released by the failed call
+        result3 = session.fetch_m4b_url("978333")
+        assert result3 == "https://cdn.libro.fm/test.m4b"
+
+    def test_cdn_downloads_bypass_semaphore(self):
+        """CDN downloads (download_m4b, download_zip_part) are NOT limited by the API semaphore."""
+        import tempfile
+
+        from librofm_downloader.downloader import download_m4b
+
+        # Fill all 3 API semaphore slots with slow calls that block
+        api_calls_blocked: threading.Event = threading.Event()
+
+        def slow_api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            # Block — holds the semaphore slot indefinitely (until test ends)
+            api_calls_blocked.wait(timeout=5)
+            return httpx.Response(
+                200,
+                json={"m4b_url": "https://cdn.libro.fm/test.m4b"},
+            )
+
+        api_transport = httpx.MockTransport(slow_api_handler)
+        session = LibroFmSession(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+            transport=api_transport,
+        )
+        session.authenticate()
+
+        # Occupy all 3 semaphore slots with blocked API calls
+        api_threads = [
+            threading.Thread(target=session.fetch_m4b_url, args=(f"978block{i}",))
+            for i in range(3)
+        ]
+        for t in api_threads:
+            t.start()
+        time.sleep(0.2)  # Let them acquire the semaphore
+
+        # Now try a CDN download — it should succeed immediately, not block on semaphore
+        cdn_started = False
+
+        def cdn_handler(request: httpx.Request) -> httpx.Response:
+            nonlocal cdn_started
+            cdn_started = True
+            return httpx.Response(200, content=b"fake m4b data")
+
+        cdn_transport = httpx.MockTransport(cdn_handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = f"{tmpdir}/test.m4b"
+            # This should NOT block even though all 3 API slots are occupied
+            result = download_m4b("https://cdn.example.com/test.m4b", output_path, transport=cdn_transport)
+            assert result.name.endswith("test.m4b")
+
+        assert cdn_started, "CDN download should have proceeded without waiting for API semaphore"
+
+        # Clean up blocked threads
+        api_calls_blocked.set()
+        for t in api_threads:
+            t.join(timeout=5)
+
+    def test_authenticate_and_fetch_library_not_limited(self):
+        """authenticate() and fetch_library() do NOT acquire the API semaphore."""
+        # Fill all 3 API semaphore slots with blocked calls
+        api_calls_blocked: threading.Event = threading.Event()
+
+        def slow_api_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            api_calls_blocked.wait(timeout=5)
+            return httpx.Response(
+                200,
+                json={"m4b_url": "https://cdn.libro.fm/test.m4b"},
+            )
+
+        # NOTE: This test uses a separate session for the blocking API calls.
+        # The session under test gets a different transport so authenticate/fetch_library
+        # can use a different handler while the blocking calls hold the semaphore.
+        api_transport = httpx.MockTransport(slow_api_handler)
+        blocking_session = LibroFmSession(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+            transport=api_transport,
+        )
+        blocking_session.authenticate()
+
+        # Occupy all 3 slots
+        api_threads = [
+            threading.Thread(target=blocking_session.fetch_m4b_url, args=(f"978block{i}",))
+            for i in range(3)
+        ]
+        for t in api_threads:
+            t.start()
+        time.sleep(0.2)
+
+        # authenticate() should work fine — it doesn't use the semaphore
+        # We need a fresh session+transport for this since the old one's auth handler
+        # would conflict with the slow_api_handler
+        def auth_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"access_token": "tok_new", "token_type": "bearer", "expires_in": 7200},
+            )
+
+        def library_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"audiobooks": []})
+
+        def combined_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return auth_handler(request)
+            return library_handler(request)
+
+        test_transport = httpx.MockTransport(combined_handler)
+        test_session = LibroFmSession(
+            base_url="https://libro.fm",
+            username="alice",
+            password="secret123",
+            transport=test_transport,
+        )
+        token = test_session.authenticate()
+        assert token == "tok_new"
+
+        # fetch_library() should also work — it doesn't use the semaphore
+        books = test_session.fetch_library()
+        assert books == []
+
+        # Clean up
+        api_calls_blocked.set()
+        for t in api_threads:
+            t.join(timeout=5)
