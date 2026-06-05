@@ -144,6 +144,7 @@ class OutputPlan:
     partial_path: Path        # .partial resume path for audio
     cover_path: Path | None   # None when disabled or no cover_url
     pdf_path: Path | None     # None when disabled or no pdf_extras
+    format_strategy: str = "m4b_mp3_fallback"  # Which format to attempt
 
 
 def _resolve_output_dir(
@@ -179,6 +180,8 @@ def resolve_output_plan(
     book: Book,
     output_base: Path | str,
     config: "Config | None" = None,
+    *,
+    format_strategy: str = "m4b_mp3_fallback",
 ) -> OutputPlan:
     """Resolve all output paths for a book into a single immutable plan.
 
@@ -219,4 +222,5 @@ def resolve_output_plan(
         partial_path=partial_path,
         cover_path=cover_path,
         pdf_path=pdf_path,
+        format_strategy=format_strategy,
     )

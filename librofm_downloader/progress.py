@@ -19,6 +19,7 @@ class PlainTextReporter:
 
     def __init__(self, stdout: TextIO | None = None) -> None:
         self._out: TextIO = stdout or sys.stdout
+        self.cancel_event: threading.Event | None = None
 
     def start_download(self, book, total_bytes: int = 0) -> None:
         """Log download start with author, title, and file size."""
@@ -91,6 +92,7 @@ class ProgressReporter:
         # Per-book identity mapping for concurrent downloads
         self._tasks: dict[int, object] = {}  # task_id -> book
         self._book_ids: dict[int, int] = {}  # id(book) -> task_id
+        self.cancel_event: threading.Event | None = None
 
     def start_download(self, book, total_bytes: int = 0) -> int:
         """Start a progress bar for this book's download.

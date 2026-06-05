@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eliminating duplicated audio-filename logic. 237 tests pass (+10 new).
   Closes #28.
 
+- **downloader:** Shrink download_book() from 9 parameters to 4
+  domain-aligned params (book, session, plan, reporter) returning a frozen
+  DownloadResult dataclass. Move history writing to caller (cli closure).
+  Add format_strategy to OutputPlan, wire cancel_event through reporter,
+  extract transport from session. Remove config from accompanying_files.
+  368 tests pass (+15 new). Closes #29.
+
 10:9bb|### Fixed
 - **progress:** Wire task_id through parallel progress callback.
   All concurrent download updates went to the same (most recently started) bar

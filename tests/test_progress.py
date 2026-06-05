@@ -178,11 +178,13 @@ class TestFailureIsolationCLI:
 
             mock_history_cls.return_value.is_downloaded.return_value = False
 
+            from librofm_downloader.downloader import DownloadResult
+
             # Book A succeeds, Book B fails, Book C succeeds
             mock_download.side_effect = [
-                Path("/audiobooks/A1/Book A.m4b"),   # success
+                DownloadResult(status="downloaded", path=Path("/audiobooks/A1/Book A.m4b"), format="m4b"),  # success
                 Exception("Network timeout"),          # failure
-                Path("/audiobooks/A3/Book C.m4b"),   # success
+                DownloadResult(status="downloaded", path=Path("/audiobooks/A3/Book C.m4b"), format="m4b"),  # success
             ]
 
             exit_code = run = __import__("librofm_downloader.cli").cli.run
@@ -658,13 +660,15 @@ class TestProgressCallbackWiring:
     """download_book() threads the progress callback through to low-level downloads."""
 
     def test_download_book_forwards_progress_to_m4b(self):
-        """progress callable passed to download_book reaches download_m4b."""
+        """progress callback from reporter reaches download_m4b chunk loop."""
         import httpx
         from pathlib import Path
+        from unittest.mock import MagicMock
         from librofm_downloader.book import Book
         from librofm_downloader.downloader import download_book
         from librofm_downloader.session import LibroFmSession
-        from librofm_downloader.history import DownloadHistory
+        from librofm_downloader.path import resolve_output_plan
+        from librofm_downloader.progress import DownloadReporter
 
         m4b_payload = b"callback-test-data" * 10  # 160 bytes
 
@@ -685,25 +689,27 @@ class TestProgressCallbackWiring:
         client.authenticate()
 
         book = Book(title="CB Test", authors=["A"], narrators=["N"], isbn="9781111111111")
-        progress_calls: list[int] = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir) / "audiobooks"
-            history = DownloadHistory(Path(tmpdir) / "history.json")
+
+            plan = resolve_output_plan(book, base_dir)
+            reporter = DownloadReporter()
+            # Spy on the reporter's update method (used as progress callback)
+            reporter.update = MagicMock(wraps=reporter.update)
 
             download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                transport=transport,
-                progress=lambda n, **kw: progress_calls.append(n),
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
             # Progress callback was invoked during the M4B download
-            assert len(progress_calls) >= 1
-            # Final value reflects the full download size
-            assert progress_calls[-1] == len(m4b_payload)
+            assert reporter.update.call_count >= 1
+            # Final call reflects the full download size
+            last_call_args = reporter.update.call_args_list[-1]
+            assert last_call_args[0][0] == len(m4b_payload)
 
 
 # ---------------------------------------------------------------------------

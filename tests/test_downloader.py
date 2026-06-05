@@ -16,13 +16,128 @@ from librofm_downloader.path import (
     resolve_output_plan,
 )
 from librofm_downloader.downloader import (
+    DownloadResult,
+    _write_history,
     download_m4b,
     download_zip_part,
     download_book,
     download_accompanying_files,
 )
+from librofm_downloader.progress import DownloadReporter
 from librofm_downloader.session import LibroFmSession
 from librofm_downloader.history import DownloadHistory
+
+
+# ---------------------------------------------------------------------------
+# Issue #29: DownloadResult dataclass
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadResult:
+    """DownloadResult frozen dataclass — shape and immutability."""
+
+    def test_instantiates_with_each_status_value(self):
+        """All three status values produce valid instances."""
+        downloaded = DownloadResult(status="downloaded", path=Path("/tmp/a.m4b"), format="m4b")
+        skipped = DownloadResult(status="skipped")
+        failed = DownloadResult(status="failed", error="network error")
+
+        assert downloaded.status == "downloaded"
+        assert skipped.status == "skipped"
+        assert failed.status == "failed"
+
+    def test_optional_fields_default_to_none(self):
+        """path, format, error all default to None when omitted."""
+        result = DownloadResult(status="skipped")
+
+        assert result.path is None
+        assert result.format is None
+        assert result.error is None
+
+    def test_is_frozen(self):
+        """Assigning to an attribute raises FrozenInstanceError."""
+        from dataclasses import FrozenInstanceError
+
+        result = DownloadResult(status="downloaded")
+        with pytest.raises(FrozenInstanceError):
+            result.status = "failed"  # type: ignore[misc]
+
+    def test_all_four_fields_present_on_downloaded_result(self):
+        """A fully-populated 'downloaded' result has all fields set."""
+        result = DownloadResult(
+            status="downloaded",
+            path=Path("/out/book.m4b"),
+            format="m4b",
+        )
+
+        assert result.status == "downloaded"
+        assert result.path == Path("/out/book.m4b")
+        assert result.format == "m4b"
+        assert result.error is None
+
+    def test_failed_result_carries_error_message(self):
+        """A 'failed' result includes the error string."""
+        result = DownloadResult(
+            status="failed",
+            error="HTTP 500 Internal Server Error",
+        )
+
+        assert result.status == "failed"
+        assert result.path is None
+        assert result.format is None
+        assert result.error == "HTTP 500 Internal Server Error"
+
+
+class TestDownloadBookNewInterface:
+    """download_book() with 4 domain-aligned params returning DownloadResult."""
+
+    def test_returns_download_result_on_successful_m4b(self):
+        """New 4-param signature returns DownloadResult(status='downloaded') for M4B."""
+        import io
+
+        m4b_payload = b"new-interface-test-data"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok_abc", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/audiobooks/9781111111111/packaged_m4b":
+                return httpx.Response(
+                    200,
+                    json={"m4b_url": "https://cdn.example.com/book.m4b"},
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=m4b_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(
+            title="Interface Test Book",
+            authors=["Test Author"],
+            narrators=["Test Narr"],
+            isbn="9781111111111",
+        )
+
+        from librofm_downloader.progress import DownloadReporter
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_mp3_fallback")
+            reporter = DownloadReporter()
+
+            result = download_book(book, client, plan, reporter)
+
+            # Returns DownloadResult, not Path | None
+            assert isinstance(result, DownloadResult)
+            assert result.status == "downloaded"
+            assert result.path is not None
+            assert result.path.exists()
+            assert result.format == "m4b"
 
 
 class TestSanitizeIllegalChars:
@@ -866,7 +981,7 @@ class TestDownloadBook:
     """End-to-end orchestration with mocked HTTP."""
 
     def test_writes_history_entry_after_successful_download(self):
-        """After successful M4B download, history entry is persisted."""
+        """After successful M4B download, caller writes history entry."""
         m4b_payload = b"complete-m4b-audio-data"
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -901,13 +1016,18 @@ class TestDownloadBook:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir)
+            reporter = DownloadReporter()
             result = download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                transport=transport,
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
+
+            # History is caller's responsibility now
+            assert result.status == "downloaded"
+            _write_history(history, book, result.format or "m4b", str(result.path))
 
             # History was written
             assert history.is_downloaded("9781111111111")
@@ -915,9 +1035,8 @@ class TestDownloadBook:
             assert entry is not None
             assert entry.format == "m4b"
             assert entry.title == "History Test Book"
-
     def test_skips_book_without_m4b(self):
-        """Book with no M4B available → returns None, no history entry, no error."""
+        """Book with no M4B available → DownloadResult(skipped), no history entry."""
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/oauth/token":
                 return httpx.Response(
@@ -944,16 +1063,17 @@ class TestDownloadBook:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir)
+            reporter = DownloadReporter()
             result = download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                transport=transport,
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
-            # Returns None (skipped)
-            assert result is None
+            # Returns skipped (no M4B in m4b_mp3_fallback → tries MP3 manifest → also 404)
+            assert result.status == "skipped"
             # No history entry written
             assert history.is_downloaded("9780000000000") is False
 
@@ -991,13 +1111,14 @@ class TestDownloadBook:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir)
+            reporter = DownloadReporter()
             with pytest.raises(httpx.HTTPStatusError):
                 download_book(
                     book=book,
-                    client=client,
-                    output_base=base_dir,
-                    history=history,
-                    transport=transport,
+                    session=client,
+                    plan=plan,
+                    reporter=reporter,
                 )
 
             # No history entry written for failed download
@@ -1034,21 +1155,23 @@ class TestDownloadBook:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir)
+            reporter = DownloadReporter()
             result = download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                transport=transport,
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
             # File is at leaf (flat), not inside a subdirectory
-            assert result is not None
+            assert result.status == "downloaded"
+            assert result.path is not None
             # Path should be base/Author/Title.m4b (flat) — title is filename stem
-            assert result.stem == "Standalone Book"
+            assert result.path.stem == "Standalone Book"
             # No extra subdirectory between author and file
-            assert result.parent.name == "Solo Author"
-            assert result.exists()
+            assert result.path.parent.name == "Solo Author"
+            assert result.path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1104,21 +1227,24 @@ class TestFormatStrategy:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_mp3_fallback")
+            reporter = DownloadReporter()
             result = download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                format_strategy="m4b_mp3_fallback",
-                transport=transport,
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
             # M4B was downloaded (not MP3)
-            assert result is not None
-            assert result.suffix == ".m4b"
+            assert result.status == "downloaded"
+            assert result.path is not None
+            assert result.path.suffix == ".m4b"
+            assert result.format == "m4b"
             # Manifest was never queried
             assert len(mp3_calls) == 0
-            # History records M4B format
+            # History is caller's responsibility now
+            _write_history(history, book, result.format, str(result.path))
             entry = history.find("9781111111111")
             assert entry is not None
             assert entry.format == "m4b"
@@ -1163,21 +1289,24 @@ class TestFormatStrategy:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_mp3_fallback")
+            reporter = DownloadReporter()
             result = download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                format_strategy="m4b_mp3_fallback",
-                transport=transport,
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
             # MP3 files were extracted
-            assert result is not None
+            assert result.status == "downloaded"
+            assert result.path is not None
+            assert result.format == "mp3"
             # At least one .mp3 file exists in output tree
             mp3_files = list(base_dir.rglob("*.mp3"))
             assert len(mp3_files) >= 1
-            # History records mp3 format
+            # History is caller's responsibility now
+            _write_history(history, book, result.format, str(result.path))
             entry = history.find("9782222222222")
             assert entry is not None
             assert entry.format == "mp3"
@@ -1224,22 +1353,25 @@ class TestFormatStrategy:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
             result = download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                format_strategy="mp3_only",
-                transport=transport,
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
             # MP3 files extracted
-            assert result is not None
+            assert result.status == "downloaded"
+            assert result.path is not None
+            assert result.format == "mp3"
             mp3_files = list(base_dir.rglob("*.mp3"))
             assert len(mp3_files) >= 1
             # M4B was never queried
             assert len(m4b_calls) == 0
-            # History records mp3 format
+            # History is caller's responsibility now
+            _write_history(history, book, result.format, str(result.path))
             entry = history.find("9783333333333")
             assert entry is not None
             assert entry.format == "mp3"
@@ -1273,17 +1405,17 @@ class TestFormatStrategy:
             history_path = Path(tmpdir) / "history.json"
             history = DownloadHistory(history_path)
 
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_only")
+            reporter = DownloadReporter()
             result = download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                format_strategy="m4b_only",
-                transport=transport,
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
             # Skipped (no M4B)
-            assert result is None
+            assert result.status == "skipped"
             # Manifest was never queried
             assert len(manifest_calls) == 0
             # No history entry
@@ -1328,7 +1460,7 @@ class TestDownloadAccompanyingFiles:
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
-            download_accompanying_files(book, plan, config, transport=transport)
+            download_accompanying_files(book, plan, transport=transport)
 
             # Cover file exists at plan.resolved location
             cover_path = plan.cover_path
@@ -1370,7 +1502,7 @@ class TestDownloadAccompanyingFiles:
             mock_client.fetch_pdf_extra_url.return_value = "https://cdn.example.com/map.pdf"
 
             plan = resolve_output_plan(book, output_dir, config=config)
-            downloaded = download_accompanying_files(book, plan, config, client=mock_client, transport=transport)
+            downloaded = download_accompanying_files(book, plan, client=mock_client, transport=transport)
 
             # PDF file exists at plan.resolved location
             pdf_path = plan.pdf_path
@@ -1408,7 +1540,7 @@ class TestDownloadAccompanyingFiles:
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
-            download_accompanying_files(book, plan, config, transport=transport)
+            download_accompanying_files(book, plan, transport=transport)
 
             # Final file exists at plan.resolved location
             final_path = plan.cover_path
@@ -1443,7 +1575,7 @@ class TestDownloadAccompanyingFiles:
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
-            downloaded = download_accompanying_files(book, plan, config, client=mock_client)
+            downloaded = download_accompanying_files(book, plan, client=mock_client)
 
             # No files downloaded (no cover URL either)
             assert len(downloaded) == 0
@@ -1472,7 +1604,7 @@ class TestDownloadAccompanyingFiles:
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
-            downloaded = download_accompanying_files(book, plan, config)
+            downloaded = download_accompanying_files(book, plan)
 
             # No files downloaded (no PDF extras either)
             assert len(downloaded) == 0
@@ -1508,7 +1640,7 @@ class TestDownloadAccompanyingFiles:
 
             # Should NOT raise — failure is non-critical
             plan = resolve_output_plan(book, output_dir, config=config)
-            result = download_accompanying_files(book, plan, config, transport=transport)
+            result = download_accompanying_files(book, plan, transport=transport)
 
             # Returns empty list (nothing downloaded)
             assert result == []
@@ -1694,7 +1826,7 @@ class TestOutputStructure:
 
             # Should NOT raise — failure is non-critical
             plan = resolve_output_plan(book, output_dir, config=config)
-            result = download_accompanying_files(book, plan, config, client=mock_client)
+            result = download_accompanying_files(book, plan, client=mock_client)
 
             # Returns empty list (nothing downloaded)
             assert result == []

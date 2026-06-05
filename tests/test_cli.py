@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from librofm_downloader.cli import run
+from librofm_downloader.downloader import DownloadResult
 
 
 class TestCLIHappyPath:
@@ -154,12 +155,12 @@ class TestCLIDownloadOrchestration:
             mock_history_instance = mock_history_cls.return_value
             mock_history_instance.is_downloaded.return_value = False
 
-            # download_book returns Path for success, None for skip
+            # download_book returns DownloadResult for each book
             from pathlib import Path
             mock_download.side_effect = [
-                Path("/audiobooks/A1/M4B Book.m4b"),  # success
-                None,  # no M4B available (skipped)
-                Path("/audiobooks/A3/Another M4B.m4b"),  # success
+                DownloadResult(status="downloaded", path=Path("/audiobooks/A1/M4B Book.m4b"), format="m4b"),
+                DownloadResult(status="skipped"),
+                DownloadResult(status="downloaded", path=Path("/audiobooks/A3/Another M4B.m4b"), format="m4b"),
             ]
 
             exit_code = run(
@@ -203,7 +204,7 @@ class TestCLIVerbose:
             ]
 
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = None  # skipped (no M4B)
+            mock_download.return_value = DownloadResult(status="skipped")  # skipped (no M4B)
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -293,7 +294,7 @@ class TestCLILimitFlag:
             ]
 
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = None
+            mock_download.return_value = DownloadResult(status="skipped")
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -309,12 +310,13 @@ class TestCLIFormatWiring:
     """Format strategy from config is passed to download_book."""
 
     def test_format_passed_to_download_book(self):
-        """config.format is forwarded to download_book(format_strategy=...)."""
+        """config.format is forwarded to OutputPlan (via resolve_output_plan)."""
         with (
             patch("librofm_downloader.cli.load_config") as mock_config,
             patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.cli.resolve_output_plan") as mock_plan,
             patch("librofm_downloader.cli.Book") as mock_book_cls,
         ):
             mock_config.return_value.username = "alice"
@@ -340,8 +342,8 @@ class TestCLIFormatWiring:
                 history_path="/fake/history.json",
             )
 
-            # download_book was called with format_strategy="mp3_only"
-            _, kwargs = mock_download.call_args
+            # resolve_output_plan was called with format_strategy="mp3_only"
+            _, kwargs = mock_plan.call_args
             assert kwargs.get("format_strategy") == "mp3_only"
 
     def test_mp3_download_reported_as_downloaded_not_skipped(self, capsys):
@@ -371,8 +373,8 @@ class TestCLIFormatWiring:
             ]
 
             mock_history_cls.return_value.is_downloaded.return_value = False
-            # download_book returns a Path (MP3 dir) — not None
-            mock_download.return_value = Path("/audiobooks/A/MP3 Book")
+            # download_book returns DownloadResult with MP3 path
+            mock_download.return_value = DownloadResult(status="downloaded", path=Path("/audiobooks/A/MP3 Book"), format="mp3")
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -422,7 +424,7 @@ class TestGracefulShutdown:
 
             from pathlib import Path
             mock_download.side_effect = [
-                Path("/audiobooks/A/Book A.m4b"),
+                DownloadResult(status="downloaded", path=Path("/audiobooks/A/Book A.m4b"), format="m4b"),
                 KeyboardInterrupt,
             ]
 
@@ -494,7 +496,7 @@ class TestIntegrationHappyPath:
             mock_history_cls.return_value.is_downloaded.return_value = False
 
             from pathlib import Path
-            mock_download.return_value = Path("/audiobooks/Author/Book.m4b")
+            mock_download.return_value = DownloadResult(status="downloaded", path=Path("/audiobooks/Author/Book.m4b"), format="m4b")
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -540,9 +542,9 @@ class TestIntegrationMixedResult:
             import httpx
 
             # Deterministic mock based on ISBN — thread-safe for concurrent workers
-            def _download_side_effect(book, **kwargs):
+            def _download_side_effect(book, *args, **kwargs):
                 if book.isbn == "978333":
-                    return None  # skipped (no format available)
+                    return DownloadResult(status="skipped")  # skipped (no format available)
                 if book.isbn == "978444":
                     raise httpx.HTTPStatusError(
                         message="Not Found",
@@ -550,7 +552,7 @@ class TestIntegrationMixedResult:
                         response=httpx.Response(404, request=httpx.Request("GET", "https://example.com/fail")),
                     )
                 # 978111 and 978222 succeed
-                return Path(f"/audiobooks/{book.authors[0]}/{book.title}.m4b")
+                return DownloadResult(status="downloaded", path=Path(f"/audiobooks/{book.authors[0]}/{book.title}.m4b"), format="m4b")
 
             mock_download.side_effect = _download_side_effect
 
@@ -903,7 +905,7 @@ class TestCLIWorkersFlag:
                 {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
             ]
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = None
+            mock_download.return_value = DownloadResult(status="skipped")
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -934,7 +936,7 @@ class TestCLIWorkersFlag:
                 {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
             ]
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = None
+            mock_download.return_value = DownloadResult(status="skipped")
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -963,7 +965,7 @@ class TestCLIWorkersFlag:
                 {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
             ]
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = None
+            mock_download.return_value = DownloadResult(status="skipped")
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -1011,7 +1013,7 @@ class TestParallelWorkers1Parity:
             ]
 
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = Path("/audiobooks/Author/Book.m4b")
+            mock_download.return_value = DownloadResult(status="downloaded", path=Path("/audiobooks/Author/Book.m4b"), format="m4b")
 
             exit_code = run(
                 config_path="/fake/config.yaml",
@@ -1045,7 +1047,7 @@ class TestParallelWorkers1Parity:
             ]
 
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = Path("/audiobooks/A/Only.m4b")
+            mock_download.return_value = DownloadResult(status="downloaded", path=Path("/audiobooks/A/Only.m4b"), format="m4b")
 
             exit_code = run(workers=1)
 
@@ -1152,12 +1154,12 @@ class TestParallelSummaryOrdering:
 
             mock_history_cls.return_value.is_downloaded.return_value = False
 
-            def _download_side_effect(book, **kwargs):
+            def _download_side_effect(book, *args, **kwargs):
                 if book.isbn == "978222":
                     raise Exception("Download failed")
                 if book.isbn == "978444":
-                    return None  # skip (no format available)
-                return Path(f"/audiobooks/{book.isbn}.m4b")
+                    return DownloadResult(status="skipped")  # skip (no format available)
+                return DownloadResult(status="downloaded", path=Path(f"/audiobooks/{book.isbn}.m4b"), format="m4b")
 
             mock_download.side_effect = _download_side_effect
 
@@ -1194,12 +1196,12 @@ class TestParallelSummaryOrdering:
 
             mock_history_cls.return_value.is_downloaded.return_value = False
 
-            def _download_side_effect(book, **kwargs):
+            def _download_side_effect(book, *args, **kwargs):
                 if book.isbn == "978222":
                     raise Exception("boom")
                 if book.isbn == "978333":
-                    return None  # skip
-                return Path(f"/audiobooks/{book.isbn}.m4b")
+                    return DownloadResult(status="skipped")  # skip
+                return DownloadResult(status="downloaded", path=Path(f"/audiobooks/{book.isbn}.m4b"), format="m4b")
 
             mock_download.side_effect = _download_side_effect
 
@@ -1246,9 +1248,9 @@ class TestParallelConcurrency:
 
             mock_history_cls.return_value.is_downloaded.return_value = False
 
-            def _slow_download(book, **kwargs):
+            def _slow_download(book, *args, **kwargs):
                 time.sleep(0.1)
-                return Path(f"/audiobooks/{book.isbn}.m4b")
+                return DownloadResult(status="downloaded", path=Path(f"/audiobooks/{book.isbn}.m4b"), format="m4b")
 
             mock_download.side_effect = _slow_download
 
@@ -1288,11 +1290,11 @@ class TestParallelConcurrency:
 
             call_results: list[str] = []
 
-            def _download_side_effect(book, **kwargs):
+            def _download_side_effect(book, *args, **kwargs):
                 call_results.append(book.isbn)
                 if book.isbn == "978222":
                     raise Exception("network error")
-                return Path(f"/audiobooks/{book.isbn}.m4b")
+                return DownloadResult(status="downloaded", path=Path(f"/audiobooks/{book.isbn}.m4b"), format="m4b")
 
             mock_download.side_effect = _download_side_effect
 
@@ -1335,7 +1337,7 @@ class TestParallelVerboseMode:
             ]
 
             mock_history_cls.return_value.is_downloaded.return_value = False
-            mock_download.return_value = Path(f"/audiobooks/book.m4b")
+            mock_download.return_value = DownloadResult(status="downloaded", path=Path(f"/audiobooks/book.m4b"), format="m4b")
 
             # Should not raise or produce garbled output
             exit_code = run(verbose=True, workers=3)
@@ -1367,10 +1369,10 @@ class TestParallelVerboseMode:
 
             mock_history_cls.return_value.is_downloaded.return_value = False
 
-            def _download_side_effect(book, **kwargs):
+            def _download_side_effect(book, *args, **kwargs):
                 if book.isbn == "978111":
                     raise Exception("connection reset")
-                return Path(f"/audiobooks/{book.isbn}.m4b")
+                return DownloadResult(status="downloaded", path=Path(f"/audiobooks/{book.isbn}.m4b"), format="m4b")
 
             mock_download.side_effect = _download_side_effect
 

@@ -11,9 +11,10 @@ from librofm_downloader.config import load_config, ConfigError, _resolve_config_
 from librofm_downloader.session import LibroFmSession, AuthError
 from librofm_downloader.history import DownloadHistory
 from librofm_downloader.book import Book
-from librofm_downloader.downloader import download_book
+from librofm_downloader.downloader import download_book, _write_history
 from librofm_downloader.orchestrator import download_all_books
 from librofm_downloader.progress import DownloadReporter
+from librofm_downloader.path import resolve_output_plan
 
 console = Console()
 
@@ -143,27 +144,30 @@ def run(
         # 5. Download loop with TTY-aware reporting
         reporter = DownloadReporter()
         cancel_event = threading.Event()
+        reporter.cancel_event = cancel_event
         console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
 
         # --- Download loop (parallel via orchestrator — Issue #16) ---
 
         def _make_download_fn():
-            """Closure capturing client, config, history, reporter for each book."""
+            """Closure capturing session, config, history, reporter for each book."""
             def _download_fn(book: Book, *, progress: "Callable[[int], None] | None" = None):
-                # Allow orchestrator to inject a per-book bound progress callback.
-                # Falls back to the shared reporter.update when not in parallel mode.
-                if progress is None:
-                    progress = reporter.update
-                return download_book(
-                    book=book,
-                    client=client,
-                    output_base=config.output_dir,
-                    history=history,
-                    format_strategy=config.format,
-                    config=config,
-                    progress=progress,
-                    cancel_event=cancel_event,
+                # Build output plan for this book (paths + format strategy)
+                plan = resolve_output_plan(
+                    book, config.output_dir, config=config, format_strategy=config.format,
                 )
+
+                result = download_book(book, client, plan, reporter)
+
+                # Write history as caller (no longer inside download_book)
+                if result.status == "downloaded":
+                    _write_history(history, book, result.format or "m4b", str(result.path))
+
+                # Return Path | None for backward compat with orchestrator
+                if result.status == "downloaded":
+                    return result.path
+                return None  # skipped or failed
+
             return _download_fn
 
         result = download_all_books(

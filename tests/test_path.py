@@ -814,3 +814,40 @@ class TestResolveOutputPlan:
 
         with pytest.raises(FrozenInstanceError):
             plan.audio_path = Path("/other")  # type: ignore[misc]
+
+
+
+class TestOutputPlanFormatStrategy:
+    """OutputPlan carries format_strategy from resolve_output_plan()."""
+
+    def test_default_format_strategy(self):
+        """When no format_strategy passed, defaults to m4b_mp3_fallback."""
+        book = Book(title="Test", authors=["A"], narrators=["N"], isbn="9780000000010")
+        plan = resolve_output_plan(book, "/base")
+
+        assert hasattr(plan, "format_strategy")
+        assert plan.format_strategy == "m4b_mp3_fallback"
+
+    def test_explicit_format_strategy(self):
+        """Passing format_strategy='mp3_only' is reflected on the plan."""
+        book = Book(title="Test", authors=["A"], narrators=["N"], isbn="9780000000011")
+        plan = resolve_output_plan(book, "/base", format_strategy="mp3_only")
+
+        assert plan.format_strategy == "mp3_only"
+
+    def test_m4b_only_format_strategy(self):
+        """Passing format_strategy='m4b_only' is reflected on the plan."""
+        book = Book(title="Test", authors=["A"], narrators=["N"], isbn="9780000000012")
+        plan = resolve_output_plan(book, "/base", format_strategy="m4b_only")
+
+        assert plan.format_strategy == "m4b_only"
+
+    def test_format_strategy_on_frozen_plan(self):
+        """format_strategy field is part of the frozen OutputPlan."""
+        from dataclasses import FrozenInstanceError
+
+        book = Book(title="Test", authors=["A"], narrators=["N"], isbn="9780000000013")
+        plan = resolve_output_plan(book, "/base")
+
+        with pytest.raises(FrozenInstanceError):
+            plan.format_strategy = "mp3_only"  # type: ignore[misc]

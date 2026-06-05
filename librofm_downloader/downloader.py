@@ -25,6 +25,23 @@ from librofm_downloader.path import (
 logger = logging.getLogger(__name__)
 
 
+from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    """Immutable result of a single book download attempt.
+
+    Returned by :func:`download_book` so callers can inspect outcome,
+    decide on history writing, and report status.
+    """
+    status: Literal["downloaded", "skipped", "failed"]
+    path: Path | None = None
+    format: str | None = None  # e.g. "m4b" or "mp3"
+    error: str | None = None
+
+
 class InterruptedDownload(Exception):
     """Raised when a download is cancelled mid-stream via cancel_event.
 
@@ -216,73 +233,70 @@ def download_m4b(
 
 def download_book(
     book: Book,
-    client: "LibroFmSession",
-    output_base: Path | str,
-    history: "DownloadHistory",
-    format_strategy: str = "m4b_mp3_fallback",
-    config: "Config | None" = None,
-    transport: httpx.BaseTransport | None = None,
-    progress: "Callable[[int], None] | None" = None,
-    cancel_event: threading.Event | None = None,
-) -> Path | None:
+    session: "LibroFmSession",
+    plan: "OutputPlan",
+    reporter: "DownloadReporter",
+) -> DownloadResult:
     """Orchestrate a single book download with format strategy.
 
     Args:
         book: The book metadata.
-        client: Authenticated LibroFmSession instance.
-        output_base: Base directory for downloads.
-        history: DownloadHistory instance to record successful downloads.
-        format_strategy: One of ``m4b_mp3_fallback``, ``mp3_only``, ``m4b_only``.
-        config: Optional Config for accompanying file settings.
-        transport: Optional httpx transport override for testing.
+        session: Authenticated LibroFmSession instance.
+        plan: Resolved output paths, format strategy, and extras flags.
+        reporter: Reporter for progress callbacks and cancel event.
 
     Returns:
-        Path to the downloaded file/dir, or None if book is skipped.
+        DownloadResult indicating outcome (downloaded/skipped/failed).
+        History is NOT written here — caller inspects result and writes.
     """
-    from datetime import datetime, timezone
-
-    plan = resolve_output_plan(book, output_base, config=config)
     output_dir = plan.audio_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    format_strategy = plan.format_strategy
+    progress = reporter.update
+    cancel_event = reporter.cancel_event
+    transport = session._client._transport
 
     # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---
     if format_strategy == "m4b_mp3_fallback":
         # Try M4B first
         try:
-            m4b_url = client.fetch_m4b_url(book.isbn)
-            result = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            _write_history(history, book, "m4b", str(result))
-            if config:
-                download_accompanying_files(book, plan, config, client=client, transport=transport)
-            return result
+            m4b_url = session.fetch_m4b_url(book.isbn)
+            result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
+            if plan.cover_path is not None or plan.pdf_path is not None:
+                download_accompanying_files(book, plan, client=session, transport=transport)
+            return DownloadResult(status="downloaded", path=result_path, format="m4b")
         except M4BUnavailableError:
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
         # Fall back to MP3
-        result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
-        if result and config:
-            download_accompanying_files(book, plan, config, client=client, transport=transport)
-        return result
+        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
+        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
+            download_accompanying_files(book, plan, client=session, transport=transport)
+        if result_path:
+            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+        return DownloadResult(status="skipped")
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
-        result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
-        if result and config:
-            download_accompanying_files(book, plan, config, client=client, transport=transport)
-        return result
+        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
+        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
+            download_accompanying_files(book, plan, client=session, transport=transport)
+        if result_path:
+            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+        return DownloadResult(status="skipped")
 
     # --- m4b_only: skip book if M4B unavailable ---
     if format_strategy == "m4b_only":
         try:
-            m4b_url = client.fetch_m4b_url(book.isbn)
-            result = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            _write_history(history, book, "m4b", str(result))
-            if config:
-                download_accompanying_files(book, plan, config, client=client, transport=transport)
-            return result
+            m4b_url = session.fetch_m4b_url(book.isbn)
+            result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
+            if plan.cover_path is not None or plan.pdf_path is not None:
+                download_accompanying_files(book, plan, client=session, transport=transport)
+            return DownloadResult(status="downloaded", path=result_path, format="m4b")
         except M4BUnavailableError:
             logger.info("Skipping %s (%s): no M4B available (m4b_only mode)", book.title, book.isbn)
-            return None
+            return DownloadResult(status="skipped")
 
     raise ValueError(f"Unknown format strategy: {format_strategy}")
 
@@ -291,7 +305,6 @@ def _download_mp3(
     book: Book,
     client: "LibroFmSession",
     output_dir: Path,
-    history: "DownloadHistory",
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
     cancel_event: threading.Event | None = None,
@@ -314,9 +327,8 @@ def _download_mp3(
         extracted = download_zip_part(part_url, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         all_extracted.extend(extracted)
 
-    # Record first extracted file as representative path
+    # Return output directory as representative path
     if all_extracted:
-        _write_history(history, book, "mp3", str(output_dir))
         return output_dir
 
     return None
@@ -427,7 +439,6 @@ def _download_pdf(
 def download_accompanying_files(
     book: Book,
     plan: "OutputPlan",
-    config: "Config",
     client: "LibroFmSession | None" = None,
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
@@ -438,28 +449,26 @@ def download_accompanying_files(
 
     Args:
         book: The book metadata.
-        plan: OutputPlan with resolved paths for cover/PDF files.
-        config: Config with download_extras / download_covers toggles.
+        plan: OutputPlan with resolved paths (None when disabled).
         client: Optional LibroFmSession for fetching PDF URLs.
         transport: Optional httpx transport override for testing.
 
     Returns:
         List of Paths successfully downloaded.
     """
-    from librofm_downloader.path import OutputPlan
     from librofm_downloader.session import LibroFmSession
 
     output_dir = plan.audio_path.parent
     downloaded: list[Path] = []
 
-    # Download cover art if enabled and available
-    if config.download_covers and book.cover_url:
+    # Download cover art when path is resolved (means covers enabled + URL present)
+    if plan.cover_path is not None:
         result = _download_cover(book.cover_url, output_dir, expected_path=plan.cover_path, transport=transport)
         if result:
             downloaded.append(result)
 
-    # Download PDF extras if enabled and available
-    if config.download_extras and book.pdf_extras and client is not None:
+    # Download PDF extras when path is resolved (means extras enabled + available)
+    if plan.pdf_path is not None:
         try:
             pdf_url = client.fetch_pdf_extra_url(book.isbn, "map.pdf")
             if pdf_url:
