@@ -60,6 +60,7 @@ def sync_run(
     verbose: bool = False,
     limit: int = 0,
     workers: int = 0,
+    rename_chapters: bool = False,
     *,
     select_mode: bool = False,
 ) -> SyncRunResult:
@@ -123,13 +124,16 @@ def sync_run(
             console.print(f"  output:   {config.output_dir}")
             console.print(f"  extras:   {config.download_extras}")
             console.print(f"  covers:   {config.download_covers}")
+            console.print(f"  chapters: {config.rename_chapters}")
             console.print(f"  user:     {config.username}")
 
         # Resolve workers: CLI flag (>0?) → config.workers → default 3
         resolved_workers = workers if workers > 0 else config.workers
         if resolved_workers < 1:
             resolved_workers = 3
-            console.print(f"  user:     {config.username}")
+
+        # Resolve rename_chapters: CLI flag (True?) → config.rename_chapters
+        resolved_rename_chapters = rename_chapters or config.rename_chapters
 
         # 2. Authenticate
         if verbose:

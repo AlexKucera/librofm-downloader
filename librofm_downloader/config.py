@@ -16,6 +16,7 @@ class Config:
     output_dir: str
     download_extras: bool
     download_covers: bool
+    rename_chapters: bool
     _config_path: Path | None = None  # None = defaulted (file missing)
     workers: int = 3
 
@@ -139,6 +140,7 @@ def load_config(
         output_dir=librofm.get("output_dir", "./audiobooks"),
         download_extras=librofm.get("download_extras", True),
         download_covers=librofm.get("download_covers", True),
+        rename_chapters=librofm.get("rename_chapters", True),
         _config_path=config_path,
         workers=librofm.get("workers", 3),
     )

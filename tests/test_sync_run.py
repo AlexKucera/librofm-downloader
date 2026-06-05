@@ -1208,6 +1208,40 @@ class TestSyncRunWorkersFlag:
             assert result.fatal_error is None
 
 
+class TestSyncRunRenameChaptersFlag:
+    """rename_chapters flag: CLI flag overrides config value."""
+
+    def test_cli_rename_chapters_overrides_config_false(self):
+        """rename_chapters=True overrides config.rename_chapters=False."""
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.sync_run.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+            mock_config.return_value.rename_chapters = False
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "B1", "authors": ["A"], "narrators": ["N"]},
+            ]
+            mock_history_cls.return_value.is_downloaded.return_value = False
+            mock_download.return_value = DownloadResult(status="skipped")
+
+            result = sync_run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                rename_chapters=True,
+            )
+
+            assert result.fatal_error is None
+
 class TestSyncRunParallelWorkers1Parity:
     """--workers 1 must produce identical behavior to sequential.
     Regression guard: same order, same result, same summary counts,

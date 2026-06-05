@@ -104,3 +104,23 @@ class TestCLIArgparse:
                 main()
             _, kwargs = mock_run.call_args
             assert kwargs["select_mode"] is True
+
+    def test_rename_chapters_flag_default(self, monkeypatch):
+        """No --rename-chapters → rename_chapters defaults to False."""
+        monkeypatch.setattr("sys.argv", ["prog"])
+        with patch("librofm_downloader.cli.run") as mock_run:
+            mock_run.return_value = 0
+            with pytest.raises(SystemExit):
+                main()
+            _, kwargs = mock_run.call_args
+            assert "rename_chapters" in kwargs
+
+    def test_rename_chapters_flag(self, monkeypatch):
+        """--rename-chapters sets rename_chapters=True."""
+        monkeypatch.setattr("sys.argv", ["prog", "--rename-chapters"])
+        with patch("librofm_downloader.cli.run") as mock_run:
+            mock_run.return_value = 0
+            with pytest.raises(SystemExit):
+                main()
+            _, kwargs = mock_run.call_args
+            assert kwargs.get("rename_chapters") is True

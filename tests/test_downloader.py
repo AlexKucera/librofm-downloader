@@ -1506,6 +1506,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1544,6 +1545,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             # Create a mock client that returns a PDF URL
@@ -1586,6 +1588,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1621,6 +1624,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=False, download_covers=True,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1650,6 +1654,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=False,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1685,6 +1690,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             # Should NOT raise — failure is non-critical
@@ -1871,6 +1877,7 @@ class TestOutputStructure:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             # Should NOT raise — failure is non-critical

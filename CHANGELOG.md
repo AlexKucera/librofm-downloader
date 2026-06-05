@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numeric prefix, auto zero-padding, null/blank title fallback, sanitization
   via existing `sanitize()`. 11 tests. Closes #32.
 
+- **config:** Add `rename_chapters` boolean field to Config dataclass with default
+  `True`. Read from YAML config, threaded through CLI (`--rename-chapters` flag)
+  and `sync_run()` resolution (CLI True → config value). 5 new tests, 223 total.
+  Closes #33.
+
 ### Refactored
 
 - **session:** Rename LibroFmClient → LibroFmSession, relocate to

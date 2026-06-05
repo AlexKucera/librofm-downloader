@@ -17,6 +17,7 @@ def run(
     verbose: bool = False,
     limit: int = 0,
     workers: int = 0,
+    rename_chapters: bool = False,
     select_mode: bool = False,
 ) -> int:
     """Thin adapter: call sync_run() and translate SyncRunResult → exit code (0/1/130)."""
@@ -27,6 +28,7 @@ def run(
         verbose=verbose,
         limit=limit,
         workers=workers,
+        rename_chapters=rename_chapters,
         select_mode=select_mode,
     )
     if result.interrupted:
@@ -46,11 +48,14 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--limit", type=int, default=0, metavar="N", help="Max books to download (0=no limit)")
     parser.add_argument("-w", "--workers", type=int, default=0, metavar="N", help="Parallel workers (0=config)")
+    parser.add_argument("--rename-chapters", action="store_true", default=False,
+                        help="Rename chapter files (default: use config)")
     parser.add_argument("--select", action="store_true", default=False, help="Interactive selection [not implemented]")
     args = parser.parse_args()
     exit_code = run(
         config_path=args.config, secrets_path=args.secrets, history_path=args.history,
-        verbose=args.verbose, limit=args.limit, workers=args.workers, select_mode=args.select,
+        verbose=args.verbose, limit=args.limit, workers=args.workers,
+        rename_chapters=args.rename_chapters, select_mode=args.select,
     )
     if exit_code == 130:
         try:
