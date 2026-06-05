@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 8:6af|## [Unreleased]
 
+### Added
+
+- **downloader:** Add `rename_chapters()` function to rename extracted MP3
+  files with chapter titles from the download manifest. Natural sort by
+  numeric prefix, auto zero-padding, null/blank title fallback, sanitization
+  via existing `sanitize()`. 11 tests. Closes #32.
 
 ### Refactored
 

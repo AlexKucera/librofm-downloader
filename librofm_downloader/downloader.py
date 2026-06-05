@@ -6,6 +6,7 @@ object lives in ``book.py``.
 """
 
 import logging
+import re
 import threading
 from pathlib import Path
 
@@ -502,3 +503,43 @@ def _write_history(
         downloaded_at=datetime.now(timezone.utc).isoformat(),
     )
     history.write(entry)
+
+
+
+def rename_chapters(
+    output_dir: Path | str,
+    tracks: list[dict],
+    book_title: str,
+) -> int:
+    """Rename extracted MP3 files to include chapter titles from the manifest.
+
+    Given a directory of .mp3 files and a tracks list, renames each file to
+    ``{zero-padded-number} - {sanitized_book_title} - {sanitized_chapter_title}.mp3``.
+    Returns count of files actually renamed.
+    """
+    output_dir = Path(output_dir)
+    mp3_files = sorted(output_dir.glob("*.mp3"))
+
+    # Natural sort by leading numeric prefix in filename stem
+    def _extract_number(p: Path) -> int:
+        m = re.match(r"(\d+)", p.stem)
+        return int(m.group(1)) if m else 0
+
+    mp3_files.sort(key=_extract_number)
+
+    # Zero-padding width from track count
+    width = len(str(len(tracks))) if tracks else 1
+    sanitized_book = sanitize(book_title)
+
+    renamed = 0
+    for mp3_file, track in zip(mp3_files, tracks):
+        num = track["number"]
+        raw_title = track.get("chapter_title", "") or ""
+        sanitized_chapter = sanitize(raw_title) or f"Chapter {num}"
+
+        new_name = f"{num:0{width}d} - {sanitized_book} - {sanitized_chapter}.mp3"
+        new_path = output_dir / new_name
+        mp3_file.rename(new_path)
+        renamed += 1
+
+    return renamed

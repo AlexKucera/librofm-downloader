@@ -22,6 +22,7 @@ from librofm_downloader.downloader import (
     download_zip_part,
     download_book,
     download_accompanying_files,
+    rename_chapters,
 )
 from librofm_downloader.progress import DownloadReporter
 from librofm_downloader.session import LibroFmSession
@@ -1878,3 +1879,218 @@ class TestOutputStructure:
 
             # Returns empty list (nothing downloaded)
             assert result == []
+
+
+
+class TestRenameChapters:
+    """Tests for rename_chapters() — post-process MP3 files with chapter titles."""
+
+    def test_basic_rename_renames_all_files_with_chapter_titles(self):
+        """Given 3 MP3 files and 3 tracks with titles, renames all to '{num} - {book} - {chapter}.mp3'."""
+        import os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create 3 MP3 files with numeric prefixes (simulating extracted ZIP contents)
+            for i in range(1, 4):
+                Path(tmpdir, f"{i}.mp3").write_text(f"audio{i}")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Prologue"},
+                {"number": 2, "chapter_title": "The Beginning"},
+                {"number": 3, "chapter_title": "Epilogue"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Test Book")
+
+            assert count == 3
+            assert Path(tmpdir, "1 - Test Book - Prologue.mp3").exists()
+            assert Path(tmpdir, "2 - Test Book - The Beginning.mp3").exists()
+            assert Path(tmpdir, "3 - Test Book - Epilogue.mp3").exists()
+            # Original files should be gone (renamed)
+            assert not Path(tmpdir, "1.mp3").exists()
+
+
+    def test_natural_sort_pairs_files_numerically_not_alphabetically(self):
+        """Files Track-1.mp3 through Track-10.mp3 are sorted numerically, so Track-10 pairs with track 10."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create files that would sort alphabetically wrong: 10 comes before 2
+            for i in [1, 2, 3, 10]:
+                Path(tmpdir, f"Track - {i}.mp3").write_text(f"audio{i}")
+
+            tracks = [
+                {"number": 1, "chapter_title": "First"},
+                {"number": 2, "chapter_title": "Second"},
+                {"number": 3, "chapter_title": "Third"},
+                {"number": 10, "chapter_title": "Tenth"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Sort Book")
+
+            assert count == 4
+            # Track - 1.mp3 should pair with track number 1 (First)
+            assert Path(tmpdir, "1 - Sort Book - First.mp3").exists()
+            # Track - 10.mp3 should pair with track number 10 (Tenth), NOT track 2
+            assert Path(tmpdir, "10 - Sort Book - Tenth.mp3").exists()
+
+    def test_null_chapter_title_falls_back_to_chapter_n(self):
+        """Tracks with None or blank chapter_title use 'Chapter {n}' fallback."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+            Path(tmpdir, "3.mp3").write_text("c")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Normal Title"},
+                {"number": 2, "chapter_title": None},
+                {"number": 3, "chapter_title": "   "},  # whitespace-only
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Fallback Book")
+
+            assert count == 3
+            assert Path(tmpdir, "1 - Fallback Book - Normal Title.mp3").exists()
+            assert Path(tmpdir, "2 - Fallback Book - Chapter 2.mp3").exists()
+            assert Path(tmpdir, "3 - Fallback Book - Chapter 3.mp3").exists()
+
+    def test_zero_padding_two_digits_for_twelve_tracks(self):
+        """12 tracks produce 2-digit zero-padded numbers (01, 02, ..., 12)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for i in range(1, 13):
+                Path(tmpdir, f"{i}.mp3").write_text(f"audio{i}")
+
+            tracks = [{"number": i, "chapter_title": f"Ch {i}"} for i in range(1, 13)]
+
+            count = rename_chapters(tmpdir, tracks, "Pad Book")
+
+            assert count == 12
+            assert Path(tmpdir, "01 - Pad Book - Ch 1.mp3").exists()
+            assert Path(tmpdir, "09 - Pad Book - Ch 9.mp3").exists()
+            assert Path(tmpdir, "10 - Pad Book - Ch 10.mp3").exists()
+            assert Path(tmpdir, "12 - Pad Book - Ch 12.mp3").exists()
+
+    def test_sanitizes_colons_slashes_and_special_chars_in_titles(self):
+        """Colons, slashes, and other illegal chars in chapter titles are cleaned via sanitize()."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Chapter 1: The Beginning / End"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Test: Book")
+
+            assert count == 1
+            # Colon becomes " -", slash is stripped by sanitize()
+            result_file = list(Path(tmpdir).glob("*.mp3"))[0]
+            assert "Chapter 1 - The Beginning  End" in result_file.name  # colon replaced, slash removed
+            # Also verify book title was sanitized
+            assert "Test - Book" in result_file.name  # colon in book title replaced
+
+
+    def test_non_mp3_files_are_ignored(self):
+        """Non-MP3 files in directory are left untouched; only .mp3 files renamed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("audio")
+            Path(tmpdir, "readme.txt").write_text("text")
+            Path(tmpdir, "cover.jpg").write_bytes(b"\xff\xd8\xff")
+
+            tracks = [{"number": 1, "chapter_title": "Only Chapter"}]
+
+            count = rename_chapters(tmpdir, tracks, "Filter Book")
+
+            assert count == 1
+            assert Path(tmpdir, "1 - Filter Book - Only Chapter.mp3").exists()
+            # Non-MP3 files untouched
+            assert Path(tmpdir, "readme.txt").exists()
+            assert Path(tmpdir, "cover.jpg").exists()
+
+
+    def test_count_mismatch_fewer_files_than_tracks_renames_available(self):
+        """When fewer MP3 files than tracks, renames only available pairs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Only 2 files but 4 tracks
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Ch 1"},
+                {"number": 2, "chapter_title": "Ch 2"},
+                {"number": 3, "chapter_title": "Ch 3"},
+                {"number": 4, "chapter_title": "Ch 4"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Mismatch Book")
+
+            # Should rename min(2, 4) = 2 files
+            assert count == 2
+            assert Path(tmpdir, "1 - Mismatch Book - Ch 1.mp3").exists()
+            assert Path(tmpdir, "2 - Mismatch Book - Ch 2.mp3").exists()
+
+
+    def test_empty_directory_returns_zero_no_error(self):
+        """Empty directory with no MP3 files is a no-op returning 0."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tracks = [{"number": 1, "chapter_title": "Ch 1"}]
+
+            count = rename_chapters(tmpdir, tracks, "Empty Book")
+
+            assert count == 0
+            assert list(Path(tmpdir).glob("*.mp3")) == []
+
+
+    def test_empty_tracks_list_returns_zero(self):
+        """Empty tracks list is a no-op even if MP3 files exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("audio")
+
+            count = rename_chapters(tmpdir, [], "No Tracks")
+
+            assert count == 0
+            # Original file should still exist (not renamed)
+
+
+    def test_idempotent_running_twice_does_not_double_rename_or_error(self):
+        """Running rename_chapters twice on same directory produces same result without errors."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Alpha"},
+                {"number": 2, "chapter_title": "Beta"},
+            ]
+
+            # First run
+            count1 = rename_chapters(tmpdir, tracks, "Idem Book")
+            # Second run on already-renamed files
+            count2 = rename_chapters(tmpdir, tracks, "Idem Book")
+
+            assert count1 == 2
+            assert count2 == 2
+            # Files exist with correct final names
+            assert Path(tmpdir, "1 - Idem Book - Alpha.mp3").exists()
+            assert Path(tmpdir, "2 - Idem Book - Beta.mp3").exists()
+            # No extra files created
+            mp3_files = list(Path(tmpdir).glob("*.mp3"))
+            assert len(mp3_files) == 2
+
+
+    def test_all_null_titles_use_chapter_n_fallback_for_all(self):
+        """When ALL tracks have null/blank chapter_title, every file gets 'Chapter N'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+            Path(tmpdir, "3.mp3").write_text("c")
+
+            tracks = [
+                {"number": 1, "chapter_title": None},
+                {"number": 2, "chapter_title": ""},
+                {"number": 3, "chapter_title": "  \t  "},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "No Titles Book")
+
+            assert count == 3
+            assert Path(tmpdir, "1 - No Titles Book - Chapter 1.mp3").exists()
+            assert Path(tmpdir, "2 - No Titles Book - Chapter 2.mp3").exists()
+            assert Path(tmpdir, "3 - No Titles Book - Chapter 3.mp3").exists()
