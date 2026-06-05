@@ -1757,3 +1757,402 @@ class TestFatalVsBookLevel:
 
             captured = capsys.readouterr()
             assert "auth" in captured.out.lower() or "credential" in captured.out.lower()
+
+
+# ===========================================================================
+# Phase 2: Issue #44 — Injectable pipeline (DI seams)
+# ===========================================================================
+
+
+class TestSyncRunSessionInjection:
+    """Tracer bullet: sync_run() accepts session= and uses it instead of constructing one."""
+
+    def test_injected_session_used_instead_of_construction(self):
+        """When session= is provided, sync_run uses it and skips LibroFmSession() + authenticate()."""
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            fake_session = MagicMock()
+            fake_session.fetch_library.return_value = [
+                {"isbn": "978111", "title": "A Book"},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = True  # all downloaded
+
+            result = sync_run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                session=fake_session,
+            )
+
+            # The injected session was used for fetch_library
+            fake_session.fetch_library.assert_called_once()
+            # LibroFmSession constructor was NOT called
+            mock_client_cls.assert_not_called()
+            # Result is clean
+            assert isinstance(result, SyncRunResult)
+            assert result.fatal_error is None
+
+            assert result.fatal_error is None
+
+
+class TestSyncRunHistoryInjection:
+    """history= injection: injected history is used for filtering instead of constructing one."""
+
+    def test_injected_history_used_for_filtering(self):
+        """When history= is provided, sync_run uses it and skips DownloadHistory() constructor."""
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "A Book"},
+            ]
+
+            fake_history = MagicMock()
+            fake_history.is_downloaded.return_value = True  # all already downloaded
+
+            result = sync_run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                session=mock_instance,
+                history=fake_history,
+            )
+
+            # The injected history was used for filtering
+            fake_history.is_downloaded.assert_called()
+            # DownloadHistory constructor was NOT called
+            mock_history_cls.assert_not_called()
+            # Result is clean
+            assert isinstance(result, SyncRunResult)
+            assert result.fatal_error is None
+
+
+
+class TestSyncRunReporterInjection:
+    """reporter= injection: injected reporter is used for summary instead of constructing one."""
+
+    def test_injected_reporter_used_for_summary(self):
+        """When reporter= is provided, sync_run uses it and skips DownloadReporter() constructor."""
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.sync_run.DownloadReporter") as mock_reporter_cls,
+            patch("librofm_downloader.sync_run.download_all_books") as mock_download_all,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "A Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            from librofm_downloader.orchestrator import OrchestratorResult
+            mock_download_all.return_value = OrchestratorResult(
+                downloaded_count=1, skipped_count=0, failed_count=0,
+            )
+
+            fake_reporter = MagicMock()
+
+            result = sync_run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                session=mock_instance,
+                reporter=fake_reporter,
+            )
+
+            # The injected reporter was used for summary
+            fake_reporter.summary.assert_called_once()
+            # DownloadReporter constructor was NOT called
+            mock_reporter_cls.assert_not_called()
+            # Result is clean
+            assert isinstance(result, SyncRunResult)
+            assert result.fatal_error is None
+
+
+
+class TestSyncRunDownloadFnInjection:
+    """download_all_fn= injection: injected fn is called instead of download_all_books()."""
+
+    def test_injected_download_fn_used(self):
+        """When download_all_fn= is provided, sync_run delegates to it instead of download_all_books()."""
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.sync_run.download_all_books") as mock_download_all,
+            patch("librofm_downloader.sync_run.DownloadReporter") as mock_reporter_cls,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok"
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "A Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            from librofm_downloader.orchestrator import OrchestratorResult
+            fake_result = OrchestratorResult(
+                downloaded_count=1, skipped_count=0, failed_count=0,
+            )
+            fake_download_fn = MagicMock(return_value=fake_result)
+
+            result = sync_run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                session=mock_instance,
+                download_all_fn=fake_download_fn,
+            )
+
+            # The injected download_all_fn was called
+            fake_download_fn.assert_called_once()
+            # The real download_all_books was NOT called
+            mock_download_all.assert_not_called()
+            # Result is clean
+            assert isinstance(result, SyncRunResult)
+            assert result.fatal_error is None
+
+
+class TestPrintVerboseConfig:
+    """_print_verbose_config() helper prints expected config fields."""
+
+    def test_prints_config_fields(self, capsys):
+        """Helper prints config, secrets, history, format, output, extras, covers, chapters, user."""
+        from librofm_downloader.sync_run import _print_verbose_config
+
+        mock_config = MagicMock()
+        mock_config._config_path = "/etc/config.yaml"
+        mock_config.format = "m4b_mp3_fallback"
+        mock_config.output_dir = "/audiobooks"
+        mock_config.download_extras = True
+        mock_config.download_covers = False
+        mock_config.rename_chapters = True
+        mock_config.username = "alice"
+
+        with patch("librofm_downloader.sync_run._resolve_config_file", return_value=None):
+            _print_verbose_config(mock_config, "/var/history.json", None)
+
+        output = capsys.readouterr().out
+        assert "/etc/config.yaml" in output
+        assert "/var/history.json" in output
+        assert "m4b_mp3_fallback" in output
+        assert "/audiobooks" in output
+        assert "alice" in output
+        assert "not found" in output  # secrets not resolved
+
+
+class TestResolveHistoryPath:
+    """_resolve_history_path() deduplicates XDG→CWD→default logic."""
+
+    def test_explicit_path_returned_unchanged(self):
+        """When history_path is provided, returns it unchanged."""
+        from librofm_downloader.sync_run import _resolve_history_path
+        result = _resolve_history_path("/custom/history.json")
+        assert result == "/custom/history.json"
+
+    def test_none_resolves_via_xdg_search(self, tmp_path, monkeypatch):
+        """When history_path is None, uses _resolve_config_file search."""
+        from librofm_downloader.sync_run import _resolve_history_path
+        xdg_dir = tmp_path / ".config" / "librofm-downloader"
+        xdg_dir.mkdir(parents=True)
+        (xdg_dir / "download_history.json").write_text("{}")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = _resolve_history_path(None)
+        assert "download_history.json" in result
+        assert "librofm-downloader" in result
+
+    def test_none_falls_back_to_xdg_default(self, tmp_path, monkeypatch):
+        """When no file found anywhere, returns XDG default path."""
+        from librofm_downloader.sync_run import _resolve_history_path
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.chdir(cwd)
+        result = _resolve_history_path(None)
+        assert ".config" in result
+        assert "download_history.json" in result
+
+class TestSyncRunFullDI:
+    """Full DI: all 4 collaborators injected, no mock.patch on sync_run internals."""
+
+    def test_full_di_no_mock_patch_needed(self, capsys):
+        """Inject all 4 collaborators → pipeline completes without patching internals.
+
+        Only load_config is patched (it reads real files, not injectable).
+        The 4 injected seams (session, history, reporter, download_all_fn)
+        replace all other mock.patch targets.
+        """
+        from librofm_downloader.orchestrator import OrchestratorResult
+
+        with patch("librofm_downloader.sync_run.load_config") as mock_config:
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
+            mock_config.return_value.workers = 3
+
+            fake_session = MagicMock()
+            fake_session.fetch_library.return_value = [
+                {"isbn": "978111", "title": "DI Book", "authors": ["Author"], "narrators": ["Narr"]},
+                {"isbn": "978222", "title": "DI Book 2", "authors": ["Author"], "narrators": ["Narr"]},
+            ]
+
+            fake_history = MagicMock()
+            fake_history.is_downloaded.side_effect = lambda isbn: isbn == "978222"
+
+            fake_reporter = MagicMock()
+
+            orchestrator_result = OrchestratorResult(
+                downloaded_count=1, skipped_count=0, failed_count=0,
+                failed_books=[], skipped_books=[], interrupted=False,
+            )
+            fake_download_all_fn = MagicMock(return_value=orchestrator_result)
+
+            result = sync_run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                verbose=False,
+                limit=0,
+                workers=0,
+                session=fake_session,
+                history=fake_history,
+                reporter=fake_reporter,
+                download_all_fn=fake_download_all_fn,
+            )
+
+            # Pipeline completed successfully
+            assert isinstance(result, SyncRunResult)
+            assert result.fatal_error is None
+            assert result.interrupted is False
+            assert result.downloaded_count == 1
+
+            # Injected collaborators were used
+            fake_session.fetch_library.assert_called_once()
+            fake_history.is_downloaded.assert_called()
+            fake_download_all_fn.assert_called_once()
+            fake_reporter.summary.assert_called_once()
+
+            # Reporter.summary received correct counts
+            summary_kwargs = fake_reporter.summary.call_args.kwargs
+            assert summary_kwargs["downloaded"] == 1
+            assert summary_kwargs["failed"] == 0
+
+
+class TestMakeDownloadFnExplicitParams:
+    """_make_download_fn() accepts explicit params instead of closing over sync_run scope."""
+
+    def test_accepts_explicit_params_and_uses_them(self):
+        """_make_download_fn accepts explicit params, closure uses them not scope."""
+        from unittest.mock import MagicMock, patch
+        import threading
+        from pathlib import Path
+
+        from librofm_downloader.sync_run import sync_run
+        from librofm_downloader.downloader import DownloadResult
+
+        # We can't call _make_download_fn directly (it's nested),
+        # so we test it through sync_run by verifying the returned
+        # download_fn closure uses injected collaborators.
+        #
+        # Strategy: inject all 4 DI params + patch download_book to verify
+        # the exact objects that flow through the closure.
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.download_book") as mock_download_book,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
+            mock_config.return_value.workers = 1
+
+            fake_session = MagicMock()
+            fake_session.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Test Book", "authors": ["A"], "narrators": ["N"]},
+            ]
+
+            fake_history = MagicMock()
+            fake_history.is_downloaded.return_value = False
+
+            fake_reporter = MagicMock()
+            cancel_event = threading.Event()
+
+            # Create a fake download_all_fn that captures the inner download_fn
+            # so we can verify the closure uses the exact injected objects.
+            captured_download_fn = []
+
+            def fake_download_all(books, *, workers, download_fn, reporter, cancel_event):
+                captured_download_fn.append(download_fn)
+                from librofm_downloader.orchestrator import OrchestratorResult
+                return OrchestratorResult(
+                    downloaded_count=1, skipped_count=0, failed_count=0,
+                )
+
+            mock_download_book.return_value = DownloadResult(
+                status="downloaded",
+                path=Path("/audiobooks/Test Book.m4b"),
+                format="m4b",
+            )
+
+            sync_run(
+                config_path="/fake/config.yaml",
+                secrets_path="/fake/secrets.yaml",
+                history_path="/fake/history.json",
+                session=fake_session,
+                history=fake_history,
+                reporter=fake_reporter,
+                download_all_fn=fake_download_all,
+                rename_chapters=True,
+            )
+
+            # The download_fn was captured — call it to verify closure behavior
+            assert len(captured_download_fn) == 1
+            inner_fn = captured_download_fn[0]
+
+            from librofm_downloader.book import Book
+            book = Book(isbn="978111", title="Test Book", authors=["A"], narrators=["N"])
+            result = inner_fn(book)
+
+            # download_book was called with the exact injected objects
+            assert mock_download_book.call_count == 1
+            call_args = mock_download_book.call_args
+            # positional args: (book, client, plan, reporter)
+            assert call_args[0][0] is book  # book
+            assert call_args[0][1] is fake_session  # client (injected session)
+            assert call_args[0][3] is fake_reporter  # reporter (injected)
+            # rename_chapters=True was passed through closure
+            assert call_args.kwargs["rename_chapters"] is True
