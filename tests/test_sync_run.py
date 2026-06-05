@@ -1669,3 +1669,91 @@ class TestSyncRunParallelPartialFileSafety:
             assert result.fatal_error is None
             # download_book was called (partial file may have been created)
             assert mock_download.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Migrated from test_progress.py — sync_run pipeline integration tests
+# (Issue #43: each test file tests exactly one production module)
+# ---------------------------------------------------------------------------
+
+
+class TestFailureIsolationCLI:
+    """One failing book does not prevent subsequent books from downloading."""
+
+    def test_one_failure_does_not_stop_batch(self, capsys):
+        """Second and third books succeed even when first fails with network error."""
+        from librofm_downloader.session import AuthError
+        from librofm_downloader.sync_run import sync_run
+
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.sync_run.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 1
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = None
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "978111", "title": "Book A", "authors": ["A1"], "narrators": ["N1"]},
+                {"isbn": "978222", "title": "Book B", "authors": ["A2"], "narrators": ["N2"]},
+                {"isbn": "978333", "title": "Book C", "authors": ["A3"], "narrators": ["N3"]},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            # First call fails, others succeed
+            mock_download.side_effect = [
+                RuntimeError("network error"),  # Book A fails
+                DownloadResult(status="downloaded", format="m4b", path="/tmp/b.m4b"),  # B succeeds
+                DownloadResult(status="downloaded", format="m4b", path="/tmp/c.m4b"),  # C succeeds
+            ]
+
+            result = sync_run(workers=1)
+
+            assert result.fatal_error is None
+            assert result.downloaded_count == 2
+            assert result.failed_count == 1
+
+            captured = capsys.readouterr()
+            assert "Failed" in captured.out
+            assert "Completed" in captured.out
+
+
+class TestFatalVsBookLevel:
+    """Fatal errors (auth fail) exit 1 immediately before any downloads start."""
+
+    def test_auth_failure_exits_one_before_downloads(self, capsys):
+        """Auth failure produces fatal error — no download_book calls made."""
+        from librofm_downloader.session import AuthError
+        from librofm_downloader.sync_run import sync_run
+
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.sync_run.download_book") as mock_download,
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "wrong_password"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 1
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.side_effect = AuthError("invalid credentials")
+
+            result = sync_run(workers=1)
+
+            assert result.fatal_error is not None
+            assert "auth" in result.fatal_error.lower() or "credential" in result.fatal_error.lower()
+            assert result.downloaded_count == 0
+            assert result.failed_count == 0
+            # download_book should NEVER have been called
+            mock_download.assert_not_called()
+
+            captured = capsys.readouterr()
+            assert "auth" in captured.out.lower() or "credential" in captured.out.lower()
