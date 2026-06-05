@@ -20,8 +20,8 @@ from rich.console import Console
 
 from librofm_downloader.book import Book
 from librofm_downloader.config import ConfigError, _resolve_config_file, load_config
-from librofm_downloader.downloader import _write_history, download_book
-from librofm_downloader.history import DownloadHistory
+from librofm_downloader.downloader import download_book
+from librofm_downloader.history import DownloadHistory, _write_history
 from librofm_downloader.orchestrator import OrchestratorResult, download_all_books
 from librofm_downloader.path import resolve_output_plan
 from librofm_downloader.progress import DownloadReporter

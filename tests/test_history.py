@@ -8,6 +8,9 @@ import pytest
 
 from librofm_downloader.history import DownloadHistory, HistoryEntry
 
+from librofm_downloader.history import _write_history
+from librofm_downloader.book import Book
+
 
 class TestWriteAndRead:
     """Tracer bullet: write an entry and read it back by ISBN."""
@@ -244,3 +247,29 @@ class TestThreadSafety:
             found = history.find("111")
             assert found is not None
             assert found.title == "First"
+
+
+
+class TestWriteHistoryRelocated:
+    """Issue #40: _write_history() lives in history.py, not downloader.py."""
+
+    def test_write_history_creates_entry_via_history_module(self):
+        """_write_history() imported from history.py writes a correct HistoryEntry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history_path = Path(tmpdir) / "download_history.json"
+            history = DownloadHistory(history_path)
+            book = Book(
+                title="Test Relocation",
+                authors=["Author"],
+                narrators=["Narrator"],
+                isbn="9780000000001",
+            )
+
+            _write_history(history, book, "m4b", "/audiobooks/Test/Test.m4b")
+
+            entry = history.find("9780000000001")
+            assert entry is not None
+            assert entry.title == "Test Relocation"
+            assert entry.format == "m4b"
+            assert entry.path == "/audiobooks/Test/Test.m4b"
+            assert entry.downloaded_at  # non-empty ISO timestamp

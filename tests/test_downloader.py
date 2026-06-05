@@ -15,9 +15,9 @@ from librofm_downloader.path import (
     OutputPlan,
     resolve_output_plan,
 )
+from librofm_downloader.history import _write_history
 from librofm_downloader.downloader import (
     DownloadResult,
-    _write_history,
     download_m4b,
     download_zip_part,
     download_book,

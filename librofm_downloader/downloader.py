@@ -14,7 +14,6 @@ import httpx
 
 from librofm_downloader.book import Book
 from librofm_downloader.session import M4BUnavailableError
-from librofm_downloader.history import HistoryEntry
 from librofm_downloader.path import (
     _resolve_output_dir,
     needs_subdirectory,
@@ -516,25 +515,6 @@ def download_accompanying_files(
             logger.warning("Failed to fetch PDF URL for %s: %s", book.isbn, exc)
 
     return downloaded
-
-
-def _write_history(
-    history: "DownloadHistory",
-    book: Book,
-    fmt: str,
-    path: str,
-) -> None:
-    """Write a download history entry."""
-    from datetime import datetime, timezone
-
-    entry = HistoryEntry(
-        isbn=book.isbn,
-        title=book.title,
-        format=fmt,
-        path=path,
-        downloaded_at=datetime.now(timezone.utc).isoformat(),
-    )
-    history.write(entry)
 
 
 
