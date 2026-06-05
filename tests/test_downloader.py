@@ -2223,6 +2223,61 @@ class TestRenameChaptersWiring:
             mp3_files = list(result.path.glob("*.mp3"))
             assert len(mp3_files) == 0
 
+    def test_m4b_mp3_fallback_m4b_success_no_rename_side_effects(self):
+        """m4b_mp3_fallback + M4B success + rename_chapters=True → no rename side effects."""
+        m4b_content = b"fake-m4b-data"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [],
+                        "tracks": [{"number": 1, "chapter_title": "Ch1"}],
+                    },
+                )
+            # M4B endpoint succeeds → no MP3 fallback
+            if "/packaged_m4b" in request.url.path:
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/book.m4b"})
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=m4b_content)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="M4B Success Fallback Book", authors=["Author"], narrators=["N"], isbn="9789900000007")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_mp3_fallback")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,  # even with True, M4B success should not trigger rename
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "m4b"
+            # No MP3 files should exist at all (M4B path taken, no fallback)
+            mp3_files = list(result.path.glob("*.mp3"))
+            assert len(mp3_files) == 0
+            # The .m4b file should exist (proving M4B download succeeded)
+            m4b_files = list(result.path.glob("*.m4b")) if result.path.is_dir() else []
+            if not m4b_files:
+                # result.path may be the .m4b file itself for m4b downloads
+                assert result.path.exists() and result.path.suffix == ".m4b"
+
     def test_rename_chapters_false_skips_rename(self):
         """mp3_only + rename_chapters=False (default) → files NOT renamed."""
         import io
@@ -2468,3 +2523,207 @@ class TestRenameChaptersWiring:
                 f"Expected 'renamed' info message, got: {info_messages}"
             assert any("log test book" in m.lower() for m in info_messages), \
                 f"Expected book title in log, got: {info_messages}"
+
+    def test_special_chars_in_chapter_titles_sanitized(self):
+        """Special characters in chapter titles are sanitized through full pipeline."""
+        import io
+        import zipfile
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-1")
+            zf.writestr("2.mp3", b"audio-2")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Introduction: The <Beginning>"},
+                            {"number": 2, "chapter_title": 'Chapter 1: "Hello / World"?'},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title='Test: A Book (2024)', authors=["Author"], narrators=["N"], isbn="9789900000007")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            # Original numeric names should be gone
+            assert not (output_dir / "1.mp3").exists()
+            assert not (output_dir / "2.mp3").exists()
+
+            # Renamed files should exist with sanitized names (no special chars)
+            mp3_files = sorted(output_dir.glob("*.mp3"))
+            assert len(mp3_files) >= 2
+            for f in mp3_files:
+                name = f.name
+                for char in '/:<>\\|?*':
+                    assert char not in name, (
+                        f"Special character '{char}' found in filename: {name}"
+                    )
+
+    def test_hundred_plus_chapters_three_digit_padding(self):
+        """100+ chapters → zero-padded to 3 digits (001, 002, … 099, 100, 101)."""
+        import io
+        import zipfile
+
+        num_tracks = 105
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            for i in range(1, num_tracks + 1):
+                zf.writestr(f"{i}.mp3", f"audio-{i}".encode())
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        track_titles = [f"Chapter {i}" for i in range(1, num_tracks + 1)]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": i, "chapter_title": title}
+                            for i, title in enumerate(track_titles, start=1)
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Big Book", authors=["Author"], narrators=["N"], isbn="9789900000007")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            # Original numeric names should all be gone
+            for i in range(1, num_tracks + 1):
+                assert not (output_dir / f"{i}.mp3").exists(), \
+                    f"Original name {i}.mp3 should be renamed"
+
+            # Three-digit zero-padded renamed files — spot-check boundaries
+            assert (output_dir / "001 - Big Book - Chapter 1.mp3").exists()
+            assert (output_dir / "005 - Big Book - Chapter 5.mp3").exists()
+            assert (output_dir / "099 - Big Book - Chapter 99.mp3").exists()
+            # The 99→100 transition is the critical boundary
+            assert (output_dir / "100 - Big Book - Chapter 100.mp3").exists()
+            assert (output_dir / "101 - Big Book - Chapter 101.mp3").exists()
+            assert (output_dir / "105 - Big Book - Chapter 105.mp3").exists()
+
+            # Exactly 105 MP3 files
+            mp3_files = list(output_dir.glob("*.mp3"))
+            assert len(mp3_files) == num_tracks
+    def test_single_track_zero_padding(self):
+        """Single-track book: zero-padding width=1, no leading zero."""
+        import io
+        import zipfile
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-only")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Only Chapter"},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Single Track Book", authors=["Author"], narrators=["N"], isbn="9789900000008")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            # Original numeric name gone
+            assert not (output_dir / "1.mp3").exists()
+            # Renamed with single-digit (width=1 for 1 track)
+            assert (output_dir / "1 - Single Track Book - Only Chapter.mp3").exists()
+            # Exactly 1 MP3 file
+            assert len(list(output_dir.glob("*.mp3"))) == 1
