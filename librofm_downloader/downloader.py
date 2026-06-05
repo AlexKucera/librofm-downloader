@@ -261,7 +261,7 @@ def download_book(
     if progress is None:
         progress = reporter.update
     cancel_event = reporter.cancel_event
-    transport = session._client._transport
+    transport = session.transport
 
     # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---
     if format_strategy == "m4b_mp3_fallback":

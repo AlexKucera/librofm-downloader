@@ -55,6 +55,11 @@ class LibroFmSession:
             transport=transport,
         )
 
+    @property
+    def transport(self) -> httpx.BaseTransport:
+        """Return the underlying httpx transport for streaming downloads."""
+        return self._client._transport
+
     def authenticate(self) -> str:
         """OAuth2 password grant → returns access_token.
 

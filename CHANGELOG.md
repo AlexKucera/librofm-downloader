@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Refactored
 
+- **session:** Expose public `transport` property on `LibroFmSession` returning
+  the underlying httpx transport. Update sole call site in `downloader.py` from
+  `session._client._transport` to `session.transport`. 2 new tests, 425 total.
+  Closes #38.
+
+
 - **session:** Rename LibroFmClient → LibroFmSession, relocate to
   session.py, inject transport at construction time. Old client.py is now
   a deprecated re-export shim. Endpoint signatures slimmed from 4-5 params

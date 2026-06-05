@@ -698,5 +698,34 @@ class TestApiRateLimiter:
 
         # Clean up
         api_calls_blocked.set()
-        for t in api_threads:
-            t.join(timeout=5)
+
+
+
+class TestTransportProperty:
+    """Public transport property — Issue #38."""
+
+    def test_returns_underlying_transport(self):
+        """session.transport returns the internal client's transport."""
+        session = LibroFmSession(
+            base_url="https://libro.fm",
+            username="u",
+            password="p",
+        )
+
+        assert session.transport is session._client._transport
+
+    def test_returns_injected_mock_transport(self):
+        """When a MockTransport is injected, session.transport returns it."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"ok": True})
+
+        mock_t = httpx.MockTransport(handler)
+        session = LibroFmSession(
+            base_url="https://libro.fm",
+            username="u",
+            password="p",
+            transport=mock_t,
+        )
+
+        assert session.transport is mock_t
