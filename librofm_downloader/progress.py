@@ -19,6 +19,7 @@ class PlainTextReporter:
 
     def __init__(self, stdout: TextIO | None = None) -> None:
         self._out: TextIO = stdout or sys.stdout
+        self.cancel_event: threading.Event | None = None
 
     def start_download(self, book, total_bytes: int = 0) -> None:
         """Log download start with author, title, and file size."""
@@ -91,12 +92,14 @@ class ProgressReporter:
         # Per-book identity mapping for concurrent downloads
         self._tasks: dict[int, object] = {}  # task_id -> book
         self._book_ids: dict[int, int] = {}  # id(book) -> task_id
+        self.cancel_event: threading.Event | None = None
 
-    def start_download(self, book, total_bytes: int = 0) -> int:
+    def start_download(self, book, total_bytes: int = 0) -> callable:
         """Start a progress bar for this book's download.
 
         Returns:
-            The Rich task ID for this book's progress bar.
+            A bound callable ``(completed, *, total=None) -> None`` that updates
+            only this book's progress bar. Returns ``None`` for PlainTextReporter.
         """
         from rich.progress import (
             BarColumn,
@@ -126,26 +129,34 @@ class ProgressReporter:
         self._tasks[task_id] = book
         self._book_ids[id(book)] = task_id
 
-        return task_id
+        # Return a bound callable that carries task_id internally.
+        # Calls _progress.update() directly — bypasses the public update().
+        task_id_internal = task_id
+        _progress_obj = self._progress
 
-    def update(self, completed: int, *, total: int | None = None, task_id: int | None = None) -> None:
-        """Update progress bar with bytes completed.
+        def _update(completed: int, *, total: int | None = None) -> None:
+            kwargs: dict = {"completed": completed}
+            if total is not None:
+                kwargs["total"] = total
+            _progress_obj.update(task_id_internal, **kwargs)
 
-        If *total* is provided (e.g. from a Content-Length header), also
-        updates the task's total so that percentage and ETA can be computed.
+        return _update
+
+    def update(self, completed: int, *, total: int | None = None) -> None:
+        """Update progress for the most recently started download.
+
+        This is a convenience fallback for callers that don't have a bound
+        callable from start_download(). It always targets the most-recently-started
+        task. For per-book targeting, use the bound callable returned by
+        start_download() instead.
 
         Args:
             completed: Bytes downloaded so far.
-            total: Optional total bytes (from Content-Length).
-            task_id: Specific task to update. Falls back to most recent if omitted.
+            total: Optional new total (e.g. from Content-Length header).
         """
-        if not self._progress:
+        if not self._progress or not self._tasks:
             return
-        if task_id is None:
-            # Backward compat: use the most recently started task
-            task_id = next(reversed(self._tasks), None)
-        if task_id is None or task_id not in self._tasks:
-            return
+        task_id = next(reversed(self._tasks))
         kwargs: dict = {"completed": completed}
         if total is not None:
             kwargs["total"] = total

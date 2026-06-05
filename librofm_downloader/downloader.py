@@ -1,10 +1,45 @@
-"""Path resolution and sanitization for librofm-downloader.
+"""Download engine for librofm-downloader.
 
-Pure logic module — no I/O, no network. All deterministic string manipulation.
+Streaming downloads (M4B, ZIP parts), accompanying files (covers, PDFs),
+and download orchestration. Path logic lives in ``path.py``; Book domain
+object lives in ``book.py``.
 """
 
 import logging
 import threading
+from pathlib import Path
+
+import httpx
+
+from librofm_downloader.book import Book
+from librofm_downloader.session import M4BUnavailableError
+from librofm_downloader.history import HistoryEntry
+from librofm_downloader.path import (
+    _resolve_output_dir,
+    needs_subdirectory,
+    resolve_output_plan,
+    resolve_path,
+    sanitize,
+)
+
+logger = logging.getLogger(__name__)
+
+
+from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    """Immutable result of a single book download attempt.
+
+    Returned by :func:`download_book` so callers can inspect outcome,
+    decide on history writing, and report status.
+    """
+    status: Literal["downloaded", "skipped", "failed"]
+    path: Path | None = None
+    format: str | None = None  # e.g. "m4b" or "mp3"
+    error: str | None = None
 
 
 class InterruptedDownload(Exception):
@@ -15,161 +50,6 @@ class InterruptedDownload(Exception):
     callers can distinguish "user hit Ctrl+C" from "download was cancelled
     cooperatively during drain."
     """
-import re
-from dataclasses import dataclass
-from pathlib import Path
-
-import httpx
-
-from librofm_downloader.client import M4BUnavailableError
-from librofm_downloader.history import HistoryEntry
-
-logger = logging.getLogger(__name__)
-
-# Characters that are unsafe in filesystem path components
-_ILLEGAL_CHARS = str.maketrans("", "", "<>/\\|?*")
-
-# Control characters U+0000–U+001F
-_CONTROL_CHARS = {chr(i) for i in range(0x00, 0x20)}
-
-
-@dataclass(frozen=True)
-class Book:
-    """Immutable book metadata record from Libro.fm."""
-
-    title: str
-    authors: list[str]
-    narrators: list[str]
-    isbn: str
-    series: str = ""
-    series_num: int | None = None
-    cover_url: str = ""
-    pdf_extras: bool = False
-    publication_year: int | None = None
-    publication_month: int | None = None
-    publication_day: int | None = None
-
-
-def sanitize(component: str) -> str:
-    """Sanitize a single path component for filesystem safety.
-
-    Rules applied in order:
-    1. Replace ``:`` with `` -``
-    2. Strip ``< > / \\ | ? *`` and control characters (U+0000–U+001F)
-    3. Remove trailing dots
-    4. Trim whitespace
-    5. Cap at 255 characters
-
-    Preserves: dashes, commas, apostrophes, parentheses, periods (non-trailing).
-    """
-    # 1. Replace colons
-    result = component.replace(":", " -")
-    # 2. Strip illegal chars and control characters
-    result = result.translate(_ILLEGAL_CHARS)
-    result = "".join(ch for ch in result if ch not in _CONTROL_CHARS)
-    # 3. Trim whitespace (before dot removal so exposed dots are caught)
-    result = result.strip()
-    # 4. Remove trailing dots
-    result = result.rstrip(".")
-    # 5. Cap at 255 characters
-    return result[:255]
-
-
-# Token name → (attribute_path, formatter)
-# attribute_path is a space-separated chain of attr lookups;
-# formatter converts the raw value to string.
-_TOKEN_REGISTRY: dict[str, tuple[str, str]] = {
-    "FIRST_AUTHOR":  ("authors", "first"),
-    "ALL_AUTHORS":   ("authors", "join"),
-    "SERIES_NAME":   ("series", "raw"),
-    "SERIES_NUM":    ("series_num", "raw"),
-    "BOOK_TITLE":    ("title", "raw"),
-    "ISBN":          ("isbn", "raw"),
-    "FIRST_NARRATOR":("narrators", "first"),
-    "ALL_NARRATORS": ("narrators", "join"),
-    "PUBLICATION_YEAR":  ("publication_year", "raw"),
-    "PUBLICATION_MONTH": ("publication_month", "raw"),
-    "PUBLICATION_DAY":   ("publication_day", "raw"),
-}
-
-
-def _token_value(book: Book, token: str) -> str:
-    """Resolve a single token to its string value from the book."""
-    if token not in _TOKEN_REGISTRY:
-        return ""
-    attr, fmt = _TOKEN_REGISTRY[token]
-    # Get the attribute value
-    val = getattr(book, attr)
-    # Format based on formatter type
-    if fmt == "first":
-        if isinstance(val, list) and val:
-            return str(val[0])
-        return ""
-    if fmt == "join":
-        if isinstance(val, list):
-            return ", ".join(str(v) for v in val)
-        return str(val) if val is not None else ""
-    # fmt == "raw"
-    return str(val) if val is not None else ""
-
-
-def resolve_path(book: Book, pattern: str | None = None) -> str:
-    """Resolve the relative output path for a book.
-
-    Args:
-        book: The book metadata.
-        pattern: Optional custom path pattern with token placeholders.
-                When set, overrides default conditional logic.
-                Tokens: FIRST_AUTHOR, ALL_AUTHORS, SERIES_NAME, SERIES_NUM,
-                BOOK_TITLE, ISBN, FIRST_NARRATOR, ALL_NARRATORS,
-                PUBLICATION_YEAR, PUBLICATION_MONTH, PUBLICATION_DAY.
-
-    Returns:
-        Sanitized relative path string.
-    """
-    if pattern:
-        return _resolve_custom_pattern(book, pattern)
-    return _resolve_default_path(book)
-
-
-def _resolve_default_path(book: Book) -> str:
-    """Default conditional path logic."""
-    first_author = sanitize(book.authors[0] if book.authors else "Unknown")
-    title = sanitize(book.title)
-
-    if book.series and book.series_num is not None:
-        series_name = sanitize(book.series)
-        return f"{first_author}/{series_name}/Book {book.series_num} {title}"
-
-    if book.series:
-        series_name = sanitize(book.series)
-        return f"{first_author}/{series_name}/{title}"
-
-    return f"{first_author}/{title}"
-
-
-def _resolve_custom_pattern(book: Book, pattern: str) -> str:
-    """Resolve path using custom pattern with token substitution."""
-
-    def replacer(match: re.Match) -> str:
-        token = match.group(1)
-        raw = _token_value(book, token)
-        return sanitize(raw)
-
-    # Replace {TOKEN} patterns
-    result = re.sub(r"\{([A-Z_]+)\}", replacer, pattern)
-    return result
-
-
-def needs_subdirectory(book: Book) -> bool:
-    """Check whether a book needs a subdirectory for accompanying files.
-
-    Returns True when PDF extras are present.
-    Cover art does NOT trigger a subdirectory here — cover downloads are
-    config-gated (``config.download_covers``) and considered separately
-    in ``_resolve_output_dir``.
-    """
-    return bool(book.pdf_extras)
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +66,7 @@ CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 def _part_filename_from_url(url: str) -> str:
     """Derive a safe filename from a URL's last path component."""
     from urllib.parse import urlparse
+
     parsed = urlparse(url)
     name = Path(parsed.path).stem or "download"
     return sanitize(name)
@@ -290,7 +171,7 @@ def download_m4b(
     """Download an M4B file via streaming chunks.
 
     Writes to ``{output_path}.partial`` during transfer, then atomically
-    renames to the final ``{output_path}`` on completion.
+    renames to the final ``output_path`` on completion.
 
     Args:
         url: The CDN URL for the M4B file.
@@ -350,123 +231,91 @@ def download_m4b(
         raise
 
 
-def _resolve_output_dir(
-    book: Book,
-    output_base: Path | str,
-    config: "Config | None" = None,
-) -> Path:
-    """Resolve the output directory for a book (parent of the actual file).
-
-    For books with accompanying files → subdirectory: base/Author/Title/
-    For standalone books → parent dir only: base/Author/  (file is leaf: Title.m4b)
-
-    Subdirectory is needed when:
-    - PDF extras exist (multi-file output), OR
-    - Cover art will be downloaded (``config.download_covers`` + ``book.cover_url``)
-    """
-    base = Path(output_base)
-    first_author = sanitize(book.authors[0] if book.authors else 'Unknown')
-
-    needs_subdir = needs_subdirectory(book)  # pdf_extras
-    if not needs_subdir and config is not None:
-        needs_subdir = bool(config.download_covers and book.cover_url)
-
-    if needs_subdir:
-        relative = resolve_path(book)  # e.g. "Author/Title" — already includes title
-        return base / relative
-
-    # Flat: file is leaf node under author dir
-    return base / first_author
-
-
 def download_book(
     book: Book,
-    client: "LibroFmClient",
-    output_base: Path | str,
-    history: "DownloadHistory",
-    format_strategy: str = "m4b_mp3_fallback",
-    config: "Config | None" = None,
-    transport: httpx.BaseTransport | None = None,
+    session: "LibroFmSession",
+    plan: "OutputPlan",
+    reporter: "DownloadReporter",
+    *,
     progress: "Callable[[int], None] | None" = None,
-    cancel_event: threading.Event | None = None,
-) -> Path | None:
+) -> DownloadResult:
     """Orchestrate a single book download with format strategy.
 
     Args:
         book: The book metadata.
-        client: Authenticated LibroFmClient instance.
-        output_base: Base directory for downloads.
-        history: DownloadHistory instance to record successful downloads.
-        format_strategy: One of ``m4b_mp3_fallback``, ``mp3_only``, ``m4b_only``.
-        config: Optional Config for accompanying file settings.
-        transport: Optional httpx transport override for testing.
+        session: Authenticated LibroFmSession instance.
+        plan: Resolved output paths, format strategy, and extras flags.
+        reporter: Reporter for progress callbacks and cancel event.
 
     Returns:
-        Path to the downloaded file/dir, or None if book is skipped.
+        DownloadResult indicating outcome (downloaded/skipped/failed).
+        History is NOT written here — caller inspects result and writes.
     """
-    from datetime import datetime, timezone
-
-    output_dir = _resolve_output_dir(book, output_base, config=config)
+    output_dir = plan.audio_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    format_strategy = plan.format_strategy
+    # Use provided bound callback (from start_download) or fall back to reporter.update
+    if progress is None:
+        progress = reporter.update
+    cancel_event = reporter.cancel_event
+    transport = session._client._transport
 
     # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---
     if format_strategy == "m4b_mp3_fallback":
         # Try M4B first
         try:
-            m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
-            title_sanitized = sanitize(book.title)
-            m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            _write_history(history, book, "m4b", str(result))
-            if config:
-                download_accompanying_files(book, output_dir, config, client=client, transport=transport)
-            return result
+            m4b_url = session.fetch_m4b_url(book.isbn)
+            result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
+            if plan.cover_path is not None or plan.pdf_path is not None:
+                download_accompanying_files(book, plan, client=session, transport=transport)
+            return DownloadResult(status="downloaded", path=result_path, format="m4b")
         except M4BUnavailableError:
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
         # Fall back to MP3
-        result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
-        if result and config:
-            download_accompanying_files(book, output_dir, config, client=client, transport=transport)
-        return result
+        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
+        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
+            download_accompanying_files(book, plan, client=session, transport=transport)
+        if result_path:
+            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+        return DownloadResult(status="skipped")
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
-        result = _download_mp3(book, client, output_dir, history, transport, progress=progress, cancel_event=cancel_event)
-        if result and config:
-            download_accompanying_files(book, output_dir, config, client=client, transport=transport)
-        return result
+        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
+        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
+            download_accompanying_files(book, plan, client=session, transport=transport)
+        if result_path:
+            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+        return DownloadResult(status="skipped")
 
     # --- m4b_only: skip book if M4B unavailable ---
     if format_strategy == "m4b_only":
         try:
-            m4b_url = client.fetch_m4b_url(book.isbn, transport=transport)
-            title_sanitized = sanitize(book.title)
-            m4b_path = output_dir / f"{title_sanitized}.m4b"
-            result = download_m4b(m4b_url, m4b_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            _write_history(history, book, "m4b", str(result))
-            if config:
-                download_accompanying_files(book, output_dir, config, client=client, transport=transport)
-            return result
+            m4b_url = session.fetch_m4b_url(book.isbn)
+            result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
+            if plan.cover_path is not None or plan.pdf_path is not None:
+                download_accompanying_files(book, plan, client=session, transport=transport)
+            return DownloadResult(status="downloaded", path=result_path, format="m4b")
         except M4BUnavailableError:
             logger.info("Skipping %s (%s): no M4B available (m4b_only mode)", book.title, book.isbn)
-            return None
+            return DownloadResult(status="skipped")
 
     raise ValueError(f"Unknown format strategy: {format_strategy}")
 
 
 def _download_mp3(
     book: Book,
-    client: "LibroFmClient",
+    client: "LibroFmSession",
     output_dir: Path,
-    history: "DownloadHistory",
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
     cancel_event: threading.Event | None = None,
 ) -> Path | None:
     """Fetch MP3 manifest and download all ZIP parts."""
     try:
-        manifest = client.fetch_download_manifest(book.isbn, transport=transport)
+        manifest = client.fetch_download_manifest(book.isbn)
     except M4BUnavailableError:
         logger.warning("MP3 manifest not available for %s (%s), skipping", book.title, book.isbn)
         return None
@@ -482,9 +331,8 @@ def _download_mp3(
         extracted = download_zip_part(part_url, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         all_extracted.extend(extracted)
 
-    # Record first extracted file as representative path
+    # Return output directory as representative path
     if all_extracted:
-        _write_history(history, book, "mp3", str(output_dir))
         return output_dir
 
     return None
@@ -508,6 +356,7 @@ def _cover_filename_from_url(url: str) -> str:
 def _download_cover(
     url: str,
     output_dir: Path,
+    expected_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> Path | None:
     """Download a cover art file via streaming .partial → atomic rename.
@@ -517,15 +366,17 @@ def _download_cover(
 
     Returns Path on success, None on failure (logs warning).
     """
-    from librofm_downloader.client import LibroFmClient
+    from librofm_downloader.session import LibroFmSession
 
-    filename = _cover_filename_from_url(url)
+    if expected_path is not None:
+        output_path = expected_path
+    else:
+        filename = _cover_filename_from_url(url)
+        output_path = output_dir / filename
 
     # Normalize protocol-relative URLs (//covers.libro.fm/... → https://covers.libro.fm/...)
     if url.startswith("//"):
         url = "https:" + url
-
-    output_path = output_dir / filename
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
@@ -534,7 +385,7 @@ def _download_cover(
         client = httpx.Client(
             transport=transport,
             follow_redirects=True,
-            headers=LibroFmClient.DEFAULT_HEADERS,
+            headers=LibroFmSession.DEFAULT_HEADERS,
         )
         with client.stream("GET", url) as resp:
             resp.raise_for_status()
@@ -556,14 +407,18 @@ def _download_pdf(
     url: str,
     filename: str,
     output_dir: Path,
+    expected_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> Path | None:
     """Download a PDF extra file via streaming .partial → atomic rename.
 
     Returns Path on success, None on failure (logs warning).
     """
-    safe_name = sanitize(filename)
-    output_path = output_dir / safe_name
+    if expected_path is not None:
+        output_path = expected_path
+    else:
+        safe_name = sanitize(filename)
+        output_path = output_dir / safe_name
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
@@ -587,9 +442,8 @@ def _download_pdf(
 
 def download_accompanying_files(
     book: Book,
-    output_dir: Path | str,
-    config: "Config",
-    client: "LibroFmClient | None" = None,
+    plan: "OutputPlan",
+    client: "LibroFmSession | None" = None,
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
 ) -> list[Path]:
@@ -599,31 +453,30 @@ def download_accompanying_files(
 
     Args:
         book: The book metadata.
-        output_dir: Directory where accompanying files are placed.
-        config: Config with download_extras / download_covers toggles.
-        client: Optional LibroFmClient for fetching PDF URLs.
+        plan: OutputPlan with resolved paths (None when disabled).
+        client: Optional LibroFmSession for fetching PDF URLs.
         transport: Optional httpx transport override for testing.
 
     Returns:
         List of Paths successfully downloaded.
     """
-    from librofm_downloader.client import LibroFmClient
+    from librofm_downloader.session import LibroFmSession
 
-    output_dir = Path(output_dir)
+    output_dir = plan.audio_path.parent
     downloaded: list[Path] = []
 
-    # Download cover art if enabled and available
-    if config.download_covers and book.cover_url:
-        result = _download_cover(book.cover_url, output_dir, transport=transport)
+    # Download cover art when path is resolved (means covers enabled + URL present)
+    if plan.cover_path is not None:
+        result = _download_cover(book.cover_url, output_dir, expected_path=plan.cover_path, transport=transport)
         if result:
             downloaded.append(result)
 
-    # Download PDF extras if enabled and available
-    if config.download_extras and book.pdf_extras and client is not None:
+    # Download PDF extras when path is resolved (means extras enabled + available)
+    if plan.pdf_path is not None:
         try:
-            pdf_url = client.fetch_pdf_extra_url(book.isbn, "map.pdf", transport=transport)
+            pdf_url = client.fetch_pdf_extra_url(book.isbn, "map.pdf")
             if pdf_url:
-                result = _download_pdf(pdf_url, "map.pdf", output_dir, transport=transport)
+                result = _download_pdf(pdf_url, "map.pdf", output_dir, expected_path=plan.pdf_path, transport=transport)
                 if result:
                     downloaded.append(result)
         except Exception as exc:

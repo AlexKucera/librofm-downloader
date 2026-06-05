@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from librofm_downloader.downloader import Book
+from librofm_downloader.book import Book
 from librofm_downloader.orchestrator import OrchestratorResult, download_all_books
 
 
@@ -876,3 +876,79 @@ class TestCtrlCDrain:
         assert len(completed_isbns) < 3, (
             f"Cooperative cancel should stop early; got {len(completed_isbns)} completions"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #30: Bound Callable — Orchestrator uses callback directly
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorUsesBoundCallback:
+    """Orchestrator passes start_download()'s bound callable to download_fn.
+
+    Issue #30: No closure-wiring code in _download_one. The reporter owns
+    task identity; the orchestrator just threads the callable through.
+    """
+
+    def test_download_fn_receives_bound_callback_from_reporter(self):
+        """download_fn(progress=...) gets the callable returned by start_download()."""
+        received_callbacks: list = []
+
+        class TrackingReporter:
+            """Returns a per-book callable from start_download()."""
+
+            def __init__(self):
+                self.started: list[Book] = []
+                self.completed: list[Book] = []
+                self._callables: list[callable] = []
+
+            def start_download(self, book: Book, total_bytes: int = 0) -> callable:
+                self.started.append(book)
+                cb = lambda completed, **kw: None  # no-op but unique per book
+                self._callables.append(cb)
+                return cb
+
+            def complete(self, book: Book) -> None:
+                self.completed.append(book)
+
+            def fail(self, book: Book, reason: str = "") -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+            def summary(self, **kwargs) -> None:
+                pass
+
+        def download_fn(book: Book, *, progress=None) -> Path | None:
+            # Capture whatever the orchestrator passes as progress=
+            received_callbacks.append((book.isbn, progress))
+            return Path(f"/fake/{book.isbn}.m4b")
+
+        raw_books = [
+            _make_raw_book(isbn="978111", title="Book A"),
+            _make_raw_book(isbn="978222", title="Book B"),
+        ]
+
+        reporter = TrackingReporter()
+        result = download_all_books(
+            raw_books,
+            workers=2,
+            download_fn=download_fn,
+            reporter=reporter,
+        )
+
+        assert result.downloaded_count == 2
+        assert len(received_callbacks) == 2
+
+        # Each book should have received its OWN bound callable (not None, not shared)
+        isbn_a, cb_a = received_callbacks[0]
+        isbn_b, cb_b = received_callbacks[1]
+
+        assert callable(cb_a), f"Book A's progress should be callable, got {type(cb_a)}"
+        assert callable(cb_b), f"Book B's progress should be callable, got {type(cb_b)}"
+        assert cb_a is not cb_b, "Each book must get its own bound callable"
+
+        # The callables must be exactly the ones the reporter created
+        assert cb_a in reporter._callables
+        assert cb_b in reporter._callables

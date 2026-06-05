@@ -5,7 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+8:6af|## [Unreleased]
+
+
+### Refactored
+
+- **session:** Rename LibroFmClient → LibroFmSession, relocate to
+  session.py, inject transport at construction time. Old client.py is now
+  a deprecated re-export shim. Endpoint signatures slimmed from 4-5 params
+  to ≤3 (transport removed). 227 tests pass (+17 new). Closes #27.
+
+- **path:** Introduce OutputPlan frozen dataclass and resolve_output_plan()
+  function to centralize all path computation for a book. Download functions
+  now consume pre-resolved plan fields instead of computing paths inline,
+  eliminating duplicated audio-filename logic. 237 tests pass (+10 new).
+  Closes #28.
+
+- **downloader:** Shrink download_book() from 9 parameters to 4
+  domain-aligned params (book, session, plan, reporter) returning a frozen
+  DownloadResult dataclass. Move history writing to caller (cli closure).
+  Add format_strategy to OutputPlan, wire cancel_event through reporter,
+  extract transport from session. Remove config from accompanying_files.
+  368 tests pass (+15 new). Closes #29.
+
+- **progress:** Return bound callable from start_download() instead of raw
+  task_id. Task identity is fully internal to progress.py. Orchestrator
+  no longer creates per-book closures — passes the bound callback
+  directly. download_book() accepts optional progress= kwarg. Public
+  update() drops task_id param. 382 tests pass (+11 new). Closes #30.
+
+- **cli/sync-run:** Extract entire download pipeline from cli.run() into
+  standalone sync_run() function in new sync_run.py module. Introduce
+  SyncRunResult frozen dataclass (replaces OrchestratorResult as public
+  return type). Slim cli.py from 252→65 lines to a thin argparse→exit
+  adapter that only patches sync_run(). Migrate 35 pipeline tests from
+  test_cli.py to test_sync_run.py (43 total + 10 CLI-only tests).
+  Add select_mode stub (ADR #6 branch point) and fatal_error field for
+  exit-code translation. 374 tests pass. Closes #31.
 
 ### Fixed
 - **progress:** Wire task_id through parallel progress callback.
