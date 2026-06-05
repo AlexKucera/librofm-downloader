@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `session._client._transport` to `session.transport`. 2 new tests, 425 total.
   Closes #38.
 
+- **downloader:** Extract `_stream_to_file()` private helper from the
+  duplicated ~30-line chunked-download loop in `download_m4b()`,
+  `download_zip_part()`, `_download_cover()`, and `_download_pdf()`. All
+  four callers are now thin wrappers that delegate streaming to the
+  shared helper. 5 new TDD tests (fresh download, resume, cancel
+  mid-stream, progress callback, error propagation). 224 total tests.
+  Net -22 lines in downloader.py. Closes #41.
+
 
 - **session:** Rename LibroFmClient → LibroFmSession, relocate to
   session.py, inject transport at construction time. Old client.py is now

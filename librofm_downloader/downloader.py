@@ -63,6 +63,64 @@ import zipfile as _zipfile
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 
 
+def _stream_to_file(
+    url: str,
+    partial_path: Path,
+    final_path: Path,
+    transport: httpx.BaseTransport | None = None,
+    progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
+    headers: dict[str, str] | None = None,
+) -> Path:
+    """Stream a URL to file via chunked download with .partial → atomic rename.
+
+    Handles resume (appends if *partial_path* exists), cooperative
+    cancellation via *cancel_event*, and progress callbacks.
+
+    Returns the *final_path* on success.  Raises ``InterruptedDownload``
+    if *cancel_event* is set mid-stream, or ``httpx.HTTPStatusError`` on HTTP errors.
+    """
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Resume support: detect existing partial file
+    resume_from = 0
+    if partial_path.exists():
+        resume_from = partial_path.stat().st_size
+        logger.info("Resuming download from byte %d", resume_from)
+
+    effective_headers = dict(headers) if headers else {}
+    if resume_from > 0:
+        effective_headers["Range"] = f"bytes={resume_from}-"
+
+    client = httpx.Client(transport=transport, follow_redirects=True)
+    mode = "ab" if resume_from > 0 else "wb"
+
+    with client.stream("GET", url, headers=effective_headers or None) as resp:
+        resp.raise_for_status()
+        with open(partial_path, mode) as f:
+            downloaded = resume_from
+            content_length: int | None = None
+            for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedDownload("Download cancelled by user")
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress:
+                    if content_length is None:
+                        cl_header = resp.headers.get("content-length")
+                        if cl_header:
+                            content_length = int(cl_header)
+                        progress(downloaded, total=content_length)
+                    else:
+                        progress(downloaded)
+
+    # Atomic rename from .partial to final filename
+    partial_path.rename(final_path)
+
+    logger.info("Downloaded %s → %s", url, final_path)
+    return final_path
+
+
 def _part_filename_from_url(url: str) -> str:
     """Derive a safe filename from a URL's last path component."""
     from urllib.parse import urlparse
@@ -101,59 +159,27 @@ def download_zip_part(
     zip_path = output_dir / f"{part_name}.zip"
     partial_path = output_dir / f"{part_name}.zip.partial"
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _stream_to_file(
+        url=url,
+        partial_path=partial_path,
+        final_path=zip_path,
+        transport=transport,
+        progress=progress,
+        cancel_event=cancel_event,
+    )
 
-    # Resume support
-    resume_from = 0
-    if partial_path.exists():
-        resume_from = partial_path.stat().st_size
-        logger.info("Resuming ZIP part from byte %d", resume_from)
+    # Extract all files from ZIP into output_dir
+    extracted: list[Path] = []
+    with _zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(output_dir)
+                for name in zf.namelist():
+                    extracted.append(output_dir / name)
 
-    headers: dict[str, str] = {}
-    if resume_from > 0:
-        headers["Range"] = f"bytes={resume_from}-"
+    # Clean up ZIP file after extraction
+    zip_path.unlink(missing_ok=True)
 
-    client = httpx.Client(transport=transport, follow_redirects=True)
-    mode = "ab" if resume_from > 0 else "wb"
-
-    try:
-        with client.stream("GET", url, headers=headers) as resp:
-            resp.raise_for_status()
-            with open(partial_path, mode) as f:
-                downloaded = resume_from
-                content_length: int | None = None
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise InterruptedDownload("Download cancelled by user")
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        if content_length is None:
-                            cl_header = resp.headers.get("content-length")
-                            if cl_header:
-                                content_length = int(cl_header)
-                            progress(downloaded, total=content_length)
-                        else:
-                            progress(downloaded)
-
-        # Atomic rename from .partial to .zip
-        partial_path.rename(zip_path)
-
-        # Extract all files from ZIP into output_dir
-        extracted: list[Path] = []
-        with _zipfile.ZipFile(zip_path, "r") as zf:
-                    zf.extractall(output_dir)
-                    for name in zf.namelist():
-                        extracted.append(output_dir / name)
-
-        # Clean up ZIP file after extraction
-        zip_path.unlink(missing_ok=True)
-
-        logger.info("Downloaded & extracted %s → %d file(s) in %s", url, len(extracted), output_dir)
-        return extracted
-    except InterruptedDownload:
-        # Skip post-processing on cancellation — partial file stays as .partial
-        raise
+    logger.info("Downloaded & extracted %s → %d file(s) in %s", url, len(extracted), output_dir)
+    return extracted
 
 
 # ---------------------------------------------------------------------------
@@ -184,51 +210,14 @@ def download_m4b(
     output_path = Path(output_path)
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
-    # Ensure parent directory exists
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Resume support: detect existing partial file
-    resume_from = 0
-    if partial_path.exists():
-        resume_from = partial_path.stat().st_size
-        logger.info("Resuming download from byte %d", resume_from)
-
-    headers: dict[str, str] = {}
-    if resume_from > 0:
-        headers["Range"] = f"bytes={resume_from}-"
-
-    client = httpx.Client(transport=transport, follow_redirects=True)
-
-    mode = "ab" if resume_from > 0 else "wb"
-
-    try:
-        with client.stream("GET", url, headers=headers) as resp:
-            resp.raise_for_status()
-
-            with open(partial_path, mode) as f:
-                downloaded = resume_from
-                content_length: int | None = None
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise InterruptedDownload("Download cancelled by user")
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        if content_length is None:
-                            cl_header = resp.headers.get("content-length")
-                            if cl_header:
-                                content_length = int(cl_header)
-                            progress(downloaded, total=content_length)
-                        else:
-                            progress(downloaded)
-
-        # Atomic rename from .partial to final filename
-        partial_path.rename(output_path)
-
-        logger.info("Downloaded %s → %s", url, output_path)
-        return output_path
-    except InterruptedDownload:
-        raise
+    return _stream_to_file(
+        url=url,
+        partial_path=partial_path,
+        final_path=output_path,
+        transport=transport,
+        progress=progress,
+        cancel_event=cancel_event,
+    )
 
 
 def download_book(
@@ -412,20 +401,13 @@ def _download_cover(
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        client = httpx.Client(
+        _stream_to_file(
+            url=url,
+            partial_path=partial_path,
+            final_path=output_path,
             transport=transport,
-            follow_redirects=True,
             headers=LibroFmSession.DEFAULT_HEADERS,
         )
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(partial_path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    f.write(chunk)
-
-        partial_path.rename(output_path)
         logger.info("Downloaded cover → %s", output_path)
         return output_path
     except Exception as exc:
@@ -454,16 +436,12 @@ def _download_pdf(
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        client = httpx.Client(transport=transport, follow_redirects=True)
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(partial_path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    f.write(chunk)
-
-        partial_path.rename(output_path)
+        _stream_to_file(
+            url=url,
+            partial_path=partial_path,
+            final_path=output_path,
+            transport=transport,
+        )
         logger.info("Downloaded PDF extra → %s", output_path)
         return output_path
     except Exception as exc:

@@ -2,6 +2,7 @@
 
 import httpx
 import pytest
+import threading
 import unittest
 from pathlib import Path
 import tempfile
@@ -18,6 +19,8 @@ from librofm_downloader.path import (
 from librofm_downloader.history import _write_history
 from librofm_downloader.downloader import (
     DownloadResult,
+    InterruptedDownload,
+    _stream_to_file,
     download_m4b,
     download_zip_part,
     download_book,
@@ -2785,3 +2788,186 @@ class TestRenameChaptersWiring:
             assert (output_dir / "1 - Single Track Book - Only Chapter.mp3").exists()
             # Exactly 1 MP3 file
             assert len(list(output_dir.glob("*.mp3"))) == 1
+
+
+class TestStreamToFile:
+    """_stream_to_file() helper — chunked streaming download with .partial → atomic rename."""
+
+    def test_fresh_download_streams_and_renames(self):
+        """Fresh download writes .partial, atomically renames to final_path, returns Path."""
+        payload = b"fake-stream-content-" * 10  # 200 bytes
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            result = _stream_to_file(
+                url="https://cdn.example.com/file.bin",
+                partial_path=partial_path,
+                final_path=final_path,
+                transport=transport,
+            )
+
+            # Final file exists with correct content
+            assert final_path.exists()
+            assert final_path.read_bytes() == payload
+            # .partial file was renamed away (atomic rename worked)
+            assert not partial_path.exists()
+            # Return value is the final path
+            assert result == final_path
+
+    def test_cancel_mid_stream_raises_interrupted(self):
+        """When cancel_event is set mid-stream, raises InterruptedDownload and leaves .partial.
+
+        Payload exceeds CHUNK_SIZE so iter_bytes actually loops multiple times,
+        giving the cancel check a chance to fire between chunks.
+        """
+        import time
+
+        from librofm_downloader.downloader import CHUNK_SIZE
+
+        cancel_event = threading.Event()
+        payload = b"X" * (CHUNK_SIZE + 1024)  # > 8 MB → 2+ chunk iterations
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=payload,
+                headers={"content-length": str(len(payload))},
+            )
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            # Set cancel from another thread after a brief delay
+            # (gives time for first chunk to start processing)
+            def set_cancel_soon():
+                time.sleep(0)  # yield to allow download to start
+                cancel_event.set()
+
+            t = threading.Thread(target=set_cancel_soon, daemon=True)
+            t.start()
+            try:
+                _stream_to_file(
+                    url="https://cdn.example.com/file.bin",
+                    partial_path=partial_path,
+                    final_path=final_path,
+                    transport=transport,
+                    cancel_event=cancel_event,
+                )
+                assert False, "Expected InterruptedDownload"
+            except InterruptedDownload:
+                pass
+
+            t.join(timeout=2)
+
+            # .partial file still exists — no atomic rename happened
+            assert partial_path.exists()
+            # Final path must NOT exist on cancellation
+            assert not final_path.exists()
+
+    def test_progress_callback_receives_bytes_with_content_length(self):
+        """Progress callback receives (downloaded, total=N) first call, then (downloaded) only."""
+        payload = b"x" * 256  # small but enough to get multiple chunks
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})
+
+        transport = httpx.MockTransport(handler)
+        progress_calls: list[dict] = []
+
+        def capture_progress(downloaded: int, **kwargs: object) -> None:
+            progress_calls.append({"downloaded": downloaded, "kwargs": kwargs})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            _stream_to_file(
+                url="https://cdn.example.com/file.bin",
+                partial_path=partial_path,
+                final_path=final_path,
+                transport=transport,
+                progress=capture_progress,
+            )
+
+        # Progress callback was called at least once
+        assert len(progress_calls) >= 1
+
+        # First call includes total=content_length as keyword arg
+        assert "total" in progress_calls[0]["kwargs"]
+        assert progress_calls[0]["kwargs"]["total"] == len(payload)
+
+        # Byte counts are monotonically increasing
+        downloaded_values = [c["downloaded"] for c in progress_calls]
+        assert downloaded_values == sorted(downloaded_values)
+        assert all(d > 0 for d in downloaded_values)
+
+    def test_resume_from_partial_file(self):
+        """Resume: appends to existing .partial file, sends Range header."""
+        first_half = b"first-half-"  # 11 bytes
+        second_half = b"second-half-"  # 12 bytes
+        full_payload = first_half + second_half
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Server should receive a Range header requesting bytes from offset 11
+            range_header = request.headers.get("range", "")
+            assert range_header == "bytes=11-", f"Expected Range: bytes=11-, got {range_header!r}"
+            return httpx.Response(
+                206,  # Partial Content
+                content=second_half,
+                headers={"content-length": str(len(second_half))},
+            )
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            # Pre-create partial file with first half of content
+            partial_path.write_bytes(first_half)
+
+            result = _stream_to_file(
+                url="https://cdn.example.com/file.bin",
+                partial_path=partial_path,
+                final_path=final_path,
+                transport=transport,
+            )
+
+            # Final file contains both halves concatenated
+            assert final_path.exists()
+            assert final_path.read_bytes() == full_payload
+            # .partial renamed away
+            assert not partial_path.exists()
+            assert result == final_path
+
+    def test_propagates_http_error(self):
+        """HTTP error (e.g. 404) raises httpx.HTTPStatusError, no final file created."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            with pytest.raises(httpx.HTTPStatusError):
+                _stream_to_file(
+                    url="https://cdn.example.com/missing.bin",
+                    partial_path=partial_path,
+                    final_path=final_path,
+                    transport=transport,
+                )
+
+            # No final file should exist after an HTTP error
+            assert not final_path.exists()
