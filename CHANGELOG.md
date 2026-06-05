@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-8:6af|## [Unreleased]
+## [Unreleased]
 
 ### Added
 
@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `True`. Read from YAML config, threaded through CLI (`--rename-chapters` flag)
   and `sync_run()` resolution (CLI True → config value). 5 new tests, 223 total.
   Closes #33.
+
+- **downloader:** Wire `rename_chapters()` into download pipeline.
+  `_download_mp3()` returns `(output_dir, tracks)` tuple; `download_book()`
+  accepts `rename_chapters` kwarg; new `_rename_and_log()` helper calls rename
+  and reports via `reporter.chapter_renamed()`. Both reporters show visible
+  feedback: "Renamed N chapter(s) for 'Book' → 'example.mp3'".
+  `sync_run.py` closure threads resolved flag through to `download_book()`.
+  6 new integration tests, ~229 total. Closes #34.
 
 ### Refactored
 

@@ -239,6 +239,7 @@ def download_book(
     reporter: "DownloadReporter",
     *,
     progress: "Callable[[int], None] | None" = None,
+    rename_chapters: bool = False,
 ) -> DownloadResult:
     """Orchestrate a single book download with format strategy.
 
@@ -275,19 +276,23 @@ def download_book(
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
         # Fall back to MP3
-        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
-        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
-            download_accompanying_files(book, plan, client=session, transport=transport)
+        result_path, mp3_tracks = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         if result_path:
+            if rename_chapters:
+                _rename_and_log(result_path, mp3_tracks, book.title, reporter)
+            if plan.cover_path is not None or plan.pdf_path is not None:
+                download_accompanying_files(book, plan, client=session, transport=transport)
             return DownloadResult(status="downloaded", path=result_path, format="mp3")
         return DownloadResult(status="skipped")
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
-        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
-        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
-            download_accompanying_files(book, plan, client=session, transport=transport)
+        result_path, mp3_tracks = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         if result_path:
+            if rename_chapters:
+                _rename_and_log(result_path, mp3_tracks, book.title, reporter)
+            if plan.cover_path is not None or plan.pdf_path is not None:
+                download_accompanying_files(book, plan, client=session, transport=transport)
             return DownloadResult(status="downloaded", path=result_path, format="mp3")
         return DownloadResult(status="skipped")
 
@@ -306,6 +311,26 @@ def download_book(
     raise ValueError(f"Unknown format strategy: {format_strategy}")
 
 
+
+def _rename_and_log(output_dir: Path, tracks: list[dict], book_title: str, reporter=None) -> None:
+    """Call rename_chapters() and log each rename operation."""
+    mp3_files = list(output_dir.glob("*.mp3"))
+    if len(mp3_files) != len(tracks) and tracks:
+        logger.warning(
+            "Chapter rename: %d MP3 file(s) vs %d track(s) — count mismatch for '%s'",
+            len(mp3_files), len(tracks), book_title,
+        )
+
+    count = rename_chapters(output_dir, tracks, book_title)
+    if count > 0:
+        logger.info("Renamed %d chapter file(s) for '%s'", count, book_title)
+        # Show user-visible feedback with an example filename
+        if reporter is not None:
+            renamed_examples = sorted(output_dir.glob("*.mp3"))
+            example = renamed_examples[0].name if renamed_examples else "(unknown)"
+            reporter.chapter_renamed(count, book_title, example)
+
+
 def _download_mp3(
     book: Book,
     client: "LibroFmSession",
@@ -313,18 +338,24 @@ def _download_mp3(
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
     cancel_event: threading.Event | None = None,
-) -> Path | None:
-    """Fetch MP3 manifest and download all ZIP parts."""
+) -> tuple[Path | None, list[dict]]:
+    """Fetch MP3 manifest and download all ZIP parts.
+
+    Returns:
+        Tuple of (output_dir on success / None on failure, tracks list from manifest).
+    """
+    tracks: list[dict] = []
     try:
         manifest = client.fetch_download_manifest(book.isbn)
     except M4BUnavailableError:
         logger.warning("MP3 manifest not available for %s (%s), skipping", book.title, book.isbn)
-        return None
+        return None, tracks
 
     parts = manifest.get("parts", [])
+    tracks = manifest.get("tracks", [])
     if not parts:
         logger.warning("Empty parts list in manifest for %s (%s), skipping", book.title, book.isbn)
-        return None
+        return None, tracks
 
     all_extracted: list[Path] = []
     for part in parts:
@@ -334,9 +365,9 @@ def _download_mp3(
 
     # Return output directory as representative path
     if all_extracted:
-        return output_dir
+        return output_dir, tracks
 
-    return None
+    return None, tracks
 
 
 # ---------------------------------------------------------------------------

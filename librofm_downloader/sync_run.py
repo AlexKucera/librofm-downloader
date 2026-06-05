@@ -197,7 +197,7 @@ def sync_run(
         # --- Download loop (parallel via orchestrator — Issue #16) ---
 
         def _make_download_fn():
-            """Closure capturing session, config, history, reporter for each book."""
+            _rc = resolved_rename_chapters  # capture resolved value
 
             def _download_fn(
                 book: Book, *, progress: Callable[[int], None] | None = None
@@ -209,8 +209,7 @@ def sync_run(
                     config=config,
                     format_strategy=config.format,
                 )
-
-                result = download_book(book, client, plan, reporter, progress=progress)
+                result = download_book(book, client, plan, reporter, progress=progress, rename_chapters=_rc)
 
                 # Write history as caller (no longer inside download_book)
                 if result.status == "downloaded":
