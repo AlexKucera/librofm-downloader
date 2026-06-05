@@ -1402,3 +1402,28 @@ class TestBoundCallableFromStartDownload:
         assert "task_id" not in sig.parameters, (
             "update() should not expose task_id; use bound callable from start_download()"
         )
+
+
+class TestReporterNoCancelEvent:
+    """Issue #39: Reporters must not carry cancellation state.
+
+    cancel_event flows through explicit parameters (sync_run → download_book →
+    streaming calls), NOT through reporter attributes.
+    """
+
+    @pytest.mark.parametrize("reporter_cls", [PlainTextReporter, ProgressReporter])
+    def test_reporter_has_no_cancel_event_attribute(self, reporter_cls):
+        """Neither reporter class exposes cancel_event on its public interface."""
+        reporter = reporter_cls()
+        assert not hasattr(reporter, "cancel_event"), (
+            f"{reporter_cls.__name__} must not have cancel_event attribute (Issue #39)"
+        )
+
+    @pytest.mark.parametrize("reporter_cls", [PlainTextReporter, ProgressReporter])
+    def test_reporter_init_signature_has_no_cancel_event(self, reporter_cls):
+        """cancel_event is not a constructor parameter."""
+        import inspect
+        sig = inspect.signature(reporter_cls.__init__)
+        assert "cancel_event" not in sig.parameters, (
+            f"{reporter_cls.__name__}.__init__ must not accept cancel_event (Issue #39)"
+        )

@@ -239,6 +239,7 @@ def download_book(
     reporter: "DownloadReporter",
     *,
     progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
     rename_chapters: bool = False,
 ) -> DownloadResult:
     """Orchestrate a single book download with format strategy.
@@ -260,7 +261,7 @@ def download_book(
     # Use provided bound callback (from start_download) or fall back to reporter.update
     if progress is None:
         progress = reporter.update
-    cancel_event = reporter.cancel_event
+    # Cooperative cancellation: explicit parameter (Issue #39 — no longer via reporter)
     transport = session.transport
 
     # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---

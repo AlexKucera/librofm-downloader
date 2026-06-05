@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Refactored
 
+- **cancel:** Thread `cancel_event` explicitly through parameter chain
+  (`sync_run` → `download_book()` → streaming calls) instead of stashing
+  it on reporter objects as shared state. Remove `cancel_event` attribute from
+  both `PlainTextReporter` and `ProgressReporter`. 429 tests (+5 net).
+  Closes #39.
+
 - **session:** Expose public `transport` property on `LibroFmSession` returning
   the underlying httpx transport. Update sole call site in `downloader.py` from
   `session._client._transport` to `session.transport`. 2 new tests, 425 total.

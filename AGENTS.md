@@ -7,6 +7,8 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
+|------|------|------|---------|
+| 2026-06-05 | issue | [20260605-issue39-remove-cancel-event-from-reporters_log.md](docs/devlog/20260605-issue39-remove-cancel-event-from-reporters_log.md) | **Issue #39 Complete:** Removed `cancel_event` from both reporter classes. Explicit param on `download_book()`, closure capture in `sync_run.py`. **+5 net tests, ~429 total** · **All pass** · **6/6 AC** |
 | 2026-06-05 | issue | [20260605-issue37-excise-client-py-dead-shim_log.md](docs/devlog/20260605-issue37-excise-client-py-dead-shim_log.md) | **Issue #37 Complete (Slice 1):** Excised `client.py` dead shim + `test_client.py`. Migrated 4 rate-limiter tests → `test_session.py`. **−337 lines dead code, 425→413 tests** · **All pass** · **6/6 AC** |
 |------|------|------|---------|
 | 2026-06-05 | issue | [20260605-issue35-integration-tests-rename-chapters-pipeline-wiring_log.md](docs/devlog/20260605-issue35-integration-tests-rename-chapters-pipeline-wiring_log.md) | **Issue #35 Complete (Slice 4):** Integration tests for rename_chapters pipeline wiring. AC#3 missing test + 4 edge cases (special chars, single-track, 105-chapter 3-digit padding). **4 new tests, ~233 total** · **All pass** · **6/6 AC** |

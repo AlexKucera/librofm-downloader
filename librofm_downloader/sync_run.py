@@ -191,13 +191,14 @@ def sync_run(
         # 6. Download loop with TTY-aware reporting
         reporter = DownloadReporter()
         cancel_event = threading.Event()
-        reporter.cancel_event = cancel_event
+        # cancel_event passed explicitly via closure to download_book() (Issue #39)
         console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
 
         # --- Download loop (parallel via orchestrator — Issue #16) ---
 
         def _make_download_fn():
             _rc = resolved_rename_chapters  # capture resolved value
+            _ce = cancel_event  # capture for closure (Issue #39 — explicit param, not via reporter)
 
             def _download_fn(
                 book: Book, *, progress: Callable[[int], None] | None = None
@@ -209,7 +210,7 @@ def sync_run(
                     config=config,
                     format_strategy=config.format,
                 )
-                result = download_book(book, client, plan, reporter, progress=progress, rename_chapters=_rc)
+                result = download_book(book, client, plan, reporter, progress=progress, rename_chapters=_rc, cancel_event=_ce)
 
                 # Write history as caller (no longer inside download_book)
                 if result.status == "downloaded":

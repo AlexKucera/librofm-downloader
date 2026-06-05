@@ -177,7 +177,6 @@ class TestDownloadBookNewInterface:
 
         book = Book(title="Callback Test", authors=["Author"], narrators=["N"], isbn="9789900000000")
         reporter = MagicMock()
-        reporter.cancel_event = None
 
         with tempfile.TemporaryDirectory() as tmpdir:
             plan = resolve_output_plan(book, Path(tmpdir), format_strategy="m4b_only")
@@ -893,6 +892,65 @@ class TestCooperativeCancellation:
     for shutdown(wait=True) to complete full futures, each download loop checks
     a threading.Event between 8 MB chunks and raises InterruptedDownload.
     """
+
+    def test_download_book_forwards_cancel_event(self):
+        """download_book() accepts cancel_event explicitly and forwards it.
+
+        Regression test for Issue #39: cancel_event must flow through the
+        explicit parameter chain (sync_run → download_book → streaming calls),
+        NOT through reporter.cancel_event.
+        """
+        import threading
+        import time
+
+        cancel_event = threading.Event()
+
+        from librofm_downloader.downloader import CHUNK_SIZE
+
+        # Payload > CHUNK_SIZE so iter_bytes produces multiple chunks,
+        # giving the cancel check a chance to fire mid-stream.
+        payload = b"\x00" * (CHUNK_SIZE + 1024)
+
+        def handler(request):
+            if "/oauth/token" in request.url.path:
+                return httpx.Response(200, json={"access_token": "tok", "token_type": "bearer"})
+            if "/audiobooks/" in request.url.path and "packaged_m4b" in request.url.path:
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/book.m4b"})
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=payload, headers={"Content-Length": str(len(payload))})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        session = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        session.authenticate()
+
+        from unittest.mock import MagicMock
+        from librofm_downloader.downloader import InterruptedDownload
+
+        book = Book(title="Cancel Test", authors=["Author"], narrators=["N"], isbn="9789900000001")
+        reporter = MagicMock()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = resolve_output_plan(book, Path(tmpdir), format_strategy="m4b_only")
+
+            # Set cancel_event shortly after download starts so the chunk loop
+            # sees it between iterations.
+            def set_cancel_soon():
+                time.sleep(0)  # yield to ensure thread runs before download starts
+                cancel_event.set()
+
+            t = threading.Thread(target=set_cancel_soon, daemon=True)
+            t.start()
+            try:
+                download_book(
+                    book, session, plan, reporter,
+                    cancel_event=cancel_event,
+                )
+                assert False, "Expected InterruptedDownload"
+            except InterruptedDownload:
+                pass
+
+            t.join(timeout=2)
 
     def test_m4b_raises_interrupted_when_cancelled_mid_download(self):
         """download_m4b raises InterruptedDownload when cancel_event is set mid-stream.

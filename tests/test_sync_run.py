@@ -132,7 +132,6 @@ class TestSyncRunInterrupted:
             )
 
             mock_reporter = MagicMock()
-            mock_reporter.cancel_event = None
             mock_reporter_cls.return_value = mock_reporter
 
             result = sync_run(verbose=False, limit=0, workers=0)
@@ -270,7 +269,6 @@ class TestSyncRunFilteringAndLimit:
             mock_hist.is_downloaded.side_effect = lambda isbn: isbn in ("9781111111111", "9782222222222")
 
             mock_reporter = MagicMock()
-            mock_reporter.cancel_event = None
             mock_reporter_cls.return_value = mock_reporter
 
             sync_run(verbose=False, limit=0, workers=0)
@@ -308,7 +306,6 @@ class TestSyncRunFilteringAndLimit:
             mock_history_cls.return_value.is_downloaded.return_value = False
 
             mock_reporter = MagicMock()
-            mock_reporter.cancel_event = None
             mock_reporter_cls.return_value = mock_reporter
 
             sync_run(verbose=False, limit=2, workers=0)
