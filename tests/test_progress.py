@@ -156,10 +156,10 @@ class TestFailureIsolationCLI:
         from unittest.mock import patch
 
         with (
-            patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
-            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
-            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.sync_run.download_book") as mock_download,
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
@@ -187,11 +187,9 @@ class TestFailureIsolationCLI:
                 DownloadResult(status="downloaded", path=Path("/audiobooks/A3/Book C.m4b"), format="m4b"),  # success
             ]
 
-            exit_code = run = __import__("librofm_downloader.cli").cli.run
-            # Need to import run properly
-            from librofm_downloader.cli import run as cli_run
+            from librofm_downloader.sync_run import sync_run
 
-            exit_code = cli_run(
+            result = sync_run(
                 config_path="/fake/config.yaml",
                 secrets_path="/fake/secrets.yaml",
                 history_path="/fake/history.json",
@@ -199,8 +197,8 @@ class TestFailureIsolationCLI:
 
             # All 3 books were attempted
             assert mock_download.call_count == 3
-            # Exit code is 0 (failures are non-fatal)
-            assert exit_code == 0
+            # Failures are non-fatal → no fatal_error
+            assert result.fatal_error is None
             captured = capsys.readouterr()
             # Reporter output: Completed for successes, Failed for failure, Summary with counts
             out = captured.out
@@ -223,9 +221,9 @@ class TestFatalVsBookLevel:
         from librofm_downloader.session import AuthError
 
         with (
-            patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmSession") as mock_client_cls,
-            patch("librofm_downloader.cli.download_book") as mock_download,
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.download_book") as mock_download,
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "wrong"
@@ -235,15 +233,15 @@ class TestFatalVsBookLevel:
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.side_effect = AuthError("Auth failed (401)")
 
-            from librofm_downloader.cli import run as cli_run
+            from librofm_downloader.sync_run import sync_run
 
-            exit_code = cli_run(
+            result = sync_run(
                 config_path="/fake/config.yaml",
                 secrets_path="/fake/secrets.yaml",
                 history_path="/fake/history.json",
             )
 
-            assert exit_code == 1
+            assert result.fatal_error is not None
             # No downloads were attempted
             assert mock_download.call_count == 0
             captured = capsys.readouterr()
