@@ -157,7 +157,7 @@ def run(
                     book, config.output_dir, config=config, format_strategy=config.format,
                 )
 
-                result = download_book(book, client, plan, reporter)
+                result = download_book(book, client, plan, reporter, progress=progress)
 
                 # Write history as caller (no longer inside download_book)
                 if result.status == "downloaded":

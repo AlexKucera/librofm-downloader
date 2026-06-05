@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extract transport from session. Remove config from accompanying_files.
   368 tests pass (+15 new). Closes #29.
 
+- **progress:** Return bound callable from start_download() instead of raw
+  task_id. Task identity is fully internal to progress.py. Orchestrator
+  no longer creates per-book closures — passes the bound callback
+  directly. download_book() accepts optional progress= kwarg. Public
+  update() drops task_id param. 382 tests pass (+11 new). Closes #30.
+
 10:9bb|### Fixed
 - **progress:** Wire task_id through parallel progress callback.
   All concurrent download updates went to the same (most recently started) bar

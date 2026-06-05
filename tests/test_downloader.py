@@ -139,6 +139,54 @@ class TestDownloadBookNewInterface:
             assert result.path.exists()
             assert result.format == "m4b"
 
+    def test_uses_provided_progress_callback_over_reporter_update(self):
+        """When progress= is passed, download_book uses it instead of reporter.update.
+
+        Issue #30: The orchestrator passes a bound callable from start_download().
+        download_book must thread it through to the chunk loop, not ignore it.
+        """
+        import httpx
+        from unittest.mock import MagicMock
+        from librofm_downloader.downloader import download_book
+
+        m4b_payload = b"progress-callback-test-data" * 10  # 240 bytes
+        received: list[int] = []
+
+        def my_callback(completed: int, *, total: int | None = None) -> None:
+            received.append(completed)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if "/packaged_m4b" in request.url.path:
+                return httpx.Response(
+                    200,
+                    json={"m4b_url": "https://cdn.example.com/book.m4b"},
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=m4b_payload, headers={"Content-Length": str(len(m4b_payload))})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        session = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        session.authenticate()
+
+        book = Book(title="Callback Test", authors=["Author"], narrators=["N"], isbn="9789900000000")
+        reporter = MagicMock()
+        reporter.cancel_event = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = resolve_output_plan(book, Path(tmpdir), format_strategy="m4b_only")
+            result = download_book(book, session, plan, reporter, progress=my_callback)
+
+            assert result.status == "downloaded"
+            # Our callback should have been called (not reporter.update)
+            assert len(received) >= 1, "Bound callback should receive progress updates"
+            # reporter.update should NOT have been called
+            reporter.update.assert_not_called()
 
 class TestSanitizeIllegalChars:
     """Sanitization strips characters that are unsafe in filesystem paths."""

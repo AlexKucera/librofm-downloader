@@ -69,17 +69,13 @@ def _download_one(
         - error: exception string if download_fn raised, else None
         - was_skipped: True if download_fn returned None (skipped)
     """
-    task_id = reporter.start_download(book)
-
-    # Create a per-book progress callback bound to this book's task_id.
-    # Without this, reporter.update() falls back to the most-recently-started
-    # bar (see ProgressReporter.update), so all parallel downloads would
-    # update the same progress bar.
-    def _progress(completed: int, *, total: int | None = None) -> None:
-        reporter.update(completed, total=total, task_id=task_id)
+    # Issue #30: start_download() returns a bound callable that already carries
+    # task identity internally. For TTY reporters this is a per-book update fn;
+    # for plain-text reporters it is None. No closure needed here.
+    progress_cb = reporter.start_download(book)
 
     try:
-        result = download_fn(book, progress=_progress)
+        result = download_fn(book, progress=progress_cb)
         if result is None:
             # Skipped (no format available)
             reporter.complete(book)  # still "complete" the progress tracking

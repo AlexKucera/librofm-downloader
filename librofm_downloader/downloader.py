@@ -236,6 +236,8 @@ def download_book(
     session: "LibroFmSession",
     plan: "OutputPlan",
     reporter: "DownloadReporter",
+    *,
+    progress: "Callable[[int], None] | None" = None,
 ) -> DownloadResult:
     """Orchestrate a single book download with format strategy.
 
@@ -253,7 +255,9 @@ def download_book(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     format_strategy = plan.format_strategy
-    progress = reporter.update
+    # Use provided bound callback (from start_download) or fall back to reporter.update
+    if progress is None:
+        progress = reporter.update
     cancel_event = reporter.cancel_event
     transport = session._client._transport
 

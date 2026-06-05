@@ -729,12 +729,13 @@ class TestProgressTotalFromContentLength:
         reporter = DownloadReporter(stdout=mock_tty)
 
         book = Book(title="Big", authors=["A"], narrators=["N"], isbn="9780000000010")
-        task_id = reporter.start_download(book, total_bytes=0)  # unknown at start
+        reporter.start_download(book, total_bytes=0)  # unknown at start
 
         # Simulate what download_m4b does after reading Content-Length header
         reporter.update(0, total=100_000_000)
 
         # Task now has a total — percentage can be computed
+        task_id = reporter._book_ids[id(book)]
         task = reporter._progress.tasks[task_id]
         assert task.total == 100_000_000
 
@@ -748,13 +749,14 @@ class TestProgressTotalFromContentLength:
         reporter = DownloadReporter(stdout=mock_tty)
 
         book = Book(title="Pct", authors=["A"], narrators=["N"], isbn="9780000000011")
-        task_id = reporter.start_download(book, total_bytes=0)
+        reporter.start_download(book, total_bytes=0)
 
         # First callback sets total (from Content-Length)
         reporter.update(0, total=50_000_000)
 
         # Now at 50% when half done
         reporter.update(25_000_000)
+        task_id = reporter._book_ids[id(book)]
         task = reporter._progress.tasks[task_id]
         assert task.percentage == 50.0
 
@@ -883,10 +885,11 @@ class TestMultiBarProgress:
         reporter = ProgressReporter(stdout=mock_tty)
 
         book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
 
-        # start_download should return a task_id (int)
-        assert isinstance(task_id_a, int)
+        # start_download should return a callable (bound to this book's task)
+        assert callable(callback_a)
+        assert not isinstance(callback_a, int)
         # Progress should have exactly 1 task
         assert len(reporter._progress.tasks) == 1
 
@@ -902,11 +905,11 @@ class TestMultiBarProgress:
         book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=50_000_000)
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        callback_b = reporter.start_download(book_b, total_bytes=50_000_000)
 
-        # Two distinct task IDs
-        assert task_id_a != task_id_b
+        # Two distinct callables
+        assert callback_a is not callback_b
         # Progress should have exactly 2 active tasks
         assert len(reporter._progress.tasks) == 2
 
@@ -922,12 +925,14 @@ class TestMultiBarProgress:
         book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=50_000_000)
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        callback_b = reporter.start_download(book_b, total_bytes=50_000_000)
 
-        # Update only book A's bar to 50%
-        reporter.update(50_000_000, task_id=task_id_a)
+        # Update only book A's bar to 50% using its bound callable
+        callback_a(50_000_000)
 
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
         task_a = reporter._progress.tasks[task_id_a]
         task_b = reporter._progress.tasks[task_id_b]
 
@@ -946,17 +951,17 @@ class TestMultiBarProgress:
         book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=50_000_000)
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
 
         assert len(reporter._progress.tasks) == 2
 
         # Complete only book A
         reporter.complete(book_a)
 
-        # Book A's task is gone, Book B's remains
-        assert task_id_a not in reporter._tasks
-        assert task_id_b in reporter._tasks
+        # Book A's task is gone from internal mapping, Book B's remains
+        assert id(book_a) not in reporter._book_ids
+        assert id(book_b) in reporter._book_ids
         assert len(reporter._progress.tasks) == 2  # Rich keeps it (completed), but our mapping is clean
 
     def test_fail_removes_only_its_bar(self):
@@ -971,15 +976,15 @@ class TestMultiBarProgress:
         book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=50_000_000)
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
 
         # Fail only book B
         reporter.fail(book_b, reason="connection reset")
 
-        # Book B's task is gone, Book A's remains
-        assert task_id_b not in reporter._tasks
-        assert task_id_a in reporter._tasks
+        # Book B's task is gone from internal mapping, Book A's remains
+        assert id(book_b) not in reporter._book_ids
+        assert id(book_a) in reporter._book_ids
 
     def test_summary_stops_progress_after_all_tasks_done(self):
         """summary() stops progress after all books completed/failed."""
@@ -1018,12 +1023,14 @@ class TestMultiBarProgress:
         book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=50_000_000)
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
 
         # Update WITHOUT task_id — should fall back to most recent (book_b)
         reporter.update(25_000_000)
 
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_a = reporter._book_ids[id(book_a)]
         task_b = reporter._progress.tasks[task_id_b]
         task_a = reporter._progress.tasks[task_id_a]
 
@@ -1101,9 +1108,9 @@ class TestParallelProgressCallbackWiring:
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
         book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=100_000_000)
-        task_id_c = reporter.start_download(book_c, total_bytes=100_000_000)
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=100_000_000)
+        reporter.start_download(book_c, total_bytes=100_000_000)
 
         # Simulate what happens in production: each download thread calls
         # reporter.update(completed) WITHOUT passing task_id — because
@@ -1117,6 +1124,9 @@ class TestParallelProgressCallbackWiring:
 
         # BUG: all updates went to the most recently started bar (book_c)
         # because task_id was None every time, triggering the fallback.
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_c = reporter._book_ids[id(book_c)]
         task_a = reporter._progress.tasks[task_id_a]
         task_b = reporter._progress.tasks[task_id_b]
         task_c = reporter._progress.tasks[task_id_c]
@@ -1126,17 +1136,8 @@ class TestParallelProgressCallbackWiring:
         assert task_a.completed == 0  # book A never got an update  ← THE BUG
         assert task_b.completed == 0  # book B never got an update  ← THE BUG
 
-    def make_progress_callback(self, reporter, task_id):
-        """Factory: returns a progress closure bound to a specific task_id.
-
-        This is what cli.py SHOULD do instead of passing ``reporter.update`` directly.
-        """
-        def _progress(completed, *, total=None):
-            reporter.update(completed, total=total, task_id=task_id)
-        return _progress
-
     def test_bound_callback_updates_correct_bar(self):
-        """When each thread gets a task_id-bound callback, bars update independently."""
+        """When each thread gets a bound callback from start_download(), bars update independently."""
         from unittest.mock import MagicMock
 
         mock_tty = MagicMock()
@@ -1148,20 +1149,19 @@ class TestParallelProgressCallbackWiring:
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
         book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=100_000_1000)
-        task_id_c = reporter.start_download(book_c, total_bytes=100_000_000)
-
-        # Each download thread gets its OWN callback, pre-bound to its task_id
-        progress_a = self.make_progress_callback(reporter, task_id_a)
-        progress_b = self.make_progress_callback(reporter, task_id_b)
-        progress_c = self.make_progress_callback(reporter, task_id_c)
+        # Each download thread gets its OWN bound callable from start_download()
+        progress_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        progress_b = reporter.start_download(book_b, total_bytes=100_000_1000)
+        progress_c = reporter.start_download(book_c, total_bytes=100_000_000)
 
         # Each thread reports its own progress
         progress_a(50_000_000)
         progress_b(30_000_000)
         progress_c(80_000_000)
 
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_c = reporter._book_ids[id(book_c)]
         task_a = reporter._progress.tasks[task_id_a]
         task_b = reporter._progress.tasks[task_id_b]
         task_c = reporter._progress.tasks[task_id_c]
@@ -1192,9 +1192,9 @@ class TestParallelProgressCallbackWiring:
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
         book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=100_000_000)
-        task_id_c = reporter.start_download(book_c, total_bytes=100_000_000)
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=100_000_000)
+        reporter.start_download(book_c, total_bytes=100_000_000)
 
         # Simulate what happens in production: each download thread calls
         # reporter.update(completed) WITHOUT passing task_id — because
@@ -1208,6 +1208,9 @@ class TestParallelProgressCallbackWiring:
 
         # BUG: all updates went to the most recently started bar (book_c)
         # because task_id was None every time, triggering the fallback.
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_c = reporter._book_ids[id(book_c)]
         task_a = reporter._progress.tasks[task_id_a]
         task_b = reporter._progress.tasks[task_id_b]
         task_c = reporter._progress.tasks[task_id_c]
@@ -1217,17 +1220,8 @@ class TestParallelProgressCallbackWiring:
         assert task_a.completed == 0  # book A never got an update  ← THE BUG
         assert task_b.completed == 0  # book B never got an update  ← THE BUG
 
-    def make_progress_callback(self, reporter, task_id):
-        """Factory: returns a progress closure bound to a specific task_id.
-
-        This is what cli.py SHOULD do instead of passing ``reporter.update`` directly.
-        """
-        def _progress(completed, *, total=None):
-            reporter.update(completed, total=total, task_id=task_id)
-        return _progress
-
     def test_bound_callback_updates_correct_bar(self):
-        """When each thread gets a task_id-bound callback, bars update independently."""
+        """When each thread gets a bound callback from start_download(), bars update independently."""
         from unittest.mock import MagicMock
 
         mock_tty = MagicMock()
@@ -1239,20 +1233,19 @@ class TestParallelProgressCallbackWiring:
         book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
         book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
 
-        task_id_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        task_id_b = reporter.start_download(book_b, total_bytes=100_000_000)
-        task_id_c = reporter.start_download(book_c, total_bytes=100_000_000)
-
-        # Each download thread gets its OWN callback, pre-bound to its task_id
-        progress_a = self.make_progress_callback(reporter, task_id_a)
-        progress_b = self.make_progress_callback(reporter, task_id_b)
-        progress_c = self.make_progress_callback(reporter, task_id_c)
+        # Each download thread gets its OWN bound callable from start_download()
+        progress_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        progress_b = reporter.start_download(book_b, total_bytes=100_000_1000)
+        progress_c = reporter.start_download(book_c, total_bytes=100_000_000)
 
         # Each thread reports its own progress
         progress_a(50_000_000)
         progress_b(30_000_000)
         progress_c(80_000_000)
 
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_c = reporter._book_ids[id(book_c)]
         task_a = reporter._progress.tasks[task_id_a]
         task_b = reporter._progress.tasks[task_id_b]
         task_c = reporter._progress.tasks[task_id_c]
@@ -1296,3 +1289,118 @@ class TestParallelProgressCallbackWiring:
         assert "Completed: Author A - Alpha" in output
         assert "Completed: Author C - Gamma" in output
         assert "Failed: Author B - Beta [9782222222222] (network error)" in output
+
+
+# ---------------------------------------------------------------------------
+# Issue #30: Bound Callable Per Book
+# ---------------------------------------------------------------------------
+
+
+class TestBoundCallableFromStartDownload:
+    """start_download() returns a bound callable that targets the correct bar.
+
+    Issue #30: task_id never leaves progress.py. The callable returned by
+    start_download() already carries the task identity internally.
+    """
+
+    def test_start_download_returns_callable_for_tty_reporter(self):
+        """ProgressReporter.start_download() returns a callable, not an int."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book = Book(title="Test Book", authors=["Author"], narrators=["N"], isbn="9780000000000")
+        callback = reporter.start_download(book, total_bytes=100_000_000)
+
+        # Must return a callable (bound to this book's task)
+        assert callable(callback)
+        # It must NOT be a raw int (the old API)
+        assert not isinstance(callback, int)
+
+    def test_bound_callable_updates_correct_bar(self):
+        """Calling each book's bound callable updates only that book's bar."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        callback_b = reporter.start_download(book_b, total_bytes=50_000_000)
+
+        # Update only book A's progress
+        callback_a(25_000_000)  # 25%
+
+        # Book A's task should show 25%, Book B should still be at 0%
+        task_a = reporter._book_ids[id(book_a)]
+        task_b = reporter._book_ids[id(book_b)]
+
+        # Rich stores completed per-task; check via internal state
+        tasks = reporter._progress.tasks
+        assert tasks[task_a].completed == 25_000_000
+        assert tasks[task_b].completed == 0
+
+        # Now update only book B
+        callback_b(25_000_000)  # 50% of its total
+        assert tasks[task_a].completed == 25_000_000  # unchanged
+        assert tasks[task_b].completed == 25_000_000
+
+    def test_plain_text_reporter_returns_none(self):
+        """PlainTextReporter.start_download() returns None (no progress bar)."""
+        reporter = PlainTextReporter()
+
+        book = Book(title="Test Book", authors=["Author"], narrators=["N"], isbn="9780000000000")
+        result = reporter.start_download(book)
+
+        assert result is None
+
+    def test_bound_callable_forwards_total_kwarg(self):
+        """Bound callable accepts and forwards the total kwarg to update()."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book = Book(title="Test Book", authors=["Author"], narrators=["N"], isbn="9780000000000")
+        callback = reporter.start_download(book, total_bytes=50_000_000)
+
+        # Update with a new total (e.g. Content-Length arriving mid-download)
+        callback(10_000_000, total=100_000_000)
+
+        task_id = reporter._book_ids[id(book)]
+        tasks = reporter._progress.tasks
+        # Total should be updated to 100M, completed should be 10M
+        assert tasks[task_id].completed == 10_000_000
+        assert tasks[task_id].total == 100_000_000
+
+    def test_update_does_not_accept_task_id(self):
+        """Public update() no longer exposes task_id — use bound callable instead.
+
+        Issue #30: task_id is fully internal. The public update() only accepts
+        completed and total kwargs.
+        """
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book = Book(title="Test", authors=["A"], narrators=["N"], isbn="9780000000000")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Calling update with task_id should raise TypeError (parameter removed)
+        import inspect
+        sig = inspect.signature(reporter.update)
+        assert "task_id" not in sig.parameters, (
+            "update() should not expose task_id; use bound callable from start_download()"
+        )
