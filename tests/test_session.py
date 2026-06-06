@@ -712,7 +712,8 @@ class TestTransportProperty:
             password="p",
         )
 
-        assert session.transport is session._client._transport
+        # Default transport is None when not injected
+        assert session.transport is None
 
     def test_returns_injected_mock_transport(self):
         """When a MockTransport is injected, session.transport returns it."""

@@ -109,7 +109,10 @@ def _stream_to_file(
                     if content_length is None:
                         cl_header = resp.headers.get("content-length")
                         if cl_header:
-                            content_length = int(cl_header)
+                            # Content-Length from a Range response
+                            # covers only remaining bytes; add
+                            # resume_from for true total.
+                            content_length = int(cl_header) + resume_from
                         progress(downloaded, total=content_length)
                     else:
                         progress(downloaded)

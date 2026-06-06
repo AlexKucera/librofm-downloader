@@ -47,6 +47,7 @@ class LibroFmSession:
         self._timeout = timeout
         self._access_token: str | None = None
         self._api_semaphore = threading.Semaphore(API_SEMAPHORE_CAPACITY)
+        self._transport = transport
 
         self._client = httpx.Client(
             base_url=self._base_url,
@@ -56,9 +57,13 @@ class LibroFmSession:
         )
 
     @property
-    def transport(self) -> httpx.BaseTransport:
-        """Return the underlying httpx transport for streaming downloads."""
-        return self._client._transport
+    def transport(self) -> httpx.BaseTransport | None:
+        """Return the httpx transport for streaming downloads.
+
+        Stored at construction time to avoid reaching into
+        ``httpx.Client._transport``, which is private API.
+        """
+        return self._transport
 
     def authenticate(self) -> str:
         """OAuth2 password grant → returns access_token.
