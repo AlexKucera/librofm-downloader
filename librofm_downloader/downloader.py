@@ -325,6 +325,9 @@ def _finalize_download(
     branches in download_book().  Callers only need to attempt their download;
     on success they delegate here for everything else.
     """
+    # Note: 'rename_chapters' param shadows the module-level rename_chapters()
+    # function. The actual function is called via _rename_and_log(), which has
+    # its own clean scope, so this is safe.
     # MP3-only: optionally rename chapter files
     if format == "mp3" and rename_chapters:
         _rename_and_log(result_path, mp3_tracks or [], book.title, reporter)
