@@ -75,7 +75,7 @@ class TestSyncRunSelectModeTTYGuard:
             patch("librofm_downloader.sync_run.load_config") as mock_config,
             patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
-            patch("sys.stdout.isatty", return_value=False),
+            patch("sys.stdin.isatty", return_value=False),
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
@@ -139,7 +139,7 @@ class TestSyncRunSelectModeEmptySelection:
             patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
             patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
             patch("librofm_downloader.selector.select_books", return_value=[]),
-            patch("sys.stdout.isatty", return_value=True),
+            patch("sys.stdin.isatty", return_value=True),
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
@@ -184,7 +184,7 @@ class TestSyncRunSelectModeSelectedFlow:
             patch("librofm_downloader.selector.select_books", return_value=selected),
             patch("librofm_downloader.sync_run.download_all_books") as mock_download,
             patch("librofm_downloader.sync_run.DownloadReporter") as mock_reporter_cls,
-            patch("sys.stdout.isatty", return_value=True),
+            patch("sys.stdin.isatty", return_value=True),
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"
@@ -241,7 +241,7 @@ class TestSyncRunSelectModeLimitIgnored:
             patch("librofm_downloader.selector.select_books", return_value=selected),
             patch("librofm_downloader.sync_run.download_all_books") as mock_download,
             patch("librofm_downloader.sync_run.DownloadReporter") as mock_reporter_cls,
-            patch("sys.stdout.isatty", return_value=True),
+            patch("sys.stdin.isatty", return_value=True),
         ):
             mock_config.return_value.username = "alice"
             mock_config.return_value.password = "secret"

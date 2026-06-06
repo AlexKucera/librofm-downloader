@@ -216,7 +216,7 @@ def sync_run(
 
         # 5. Select mode pipeline (ADR #6)
         if select_mode:
-            if not sys.stdout.isatty():
+            if not sys.stdin.isatty():
                 console.print("[red]--select requires an interactive terminal.[/red]")
                 return SyncRunResult(fatal_error="--select requires an interactive terminal")
 
