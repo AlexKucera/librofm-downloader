@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 
 @dataclass(frozen=True)
