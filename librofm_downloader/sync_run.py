@@ -11,6 +11,7 @@ calls sync_run() and translates SyncRunResult → exit code.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -124,7 +125,7 @@ def sync_run(
         verbose: Print extra detail (URLs, paths, API responses).
         limit: Maximum number of books to download (0 = no limit).
         workers: Parallel download worker count (0 = use config value).
-        select_mode: Interactive book selection (ADR #6, not yet implemented).
+        select_mode: Interactive book selection (ADR #6).
 
     Returns:
         SyncRunResult with counts and per-book details.
@@ -202,7 +203,7 @@ def sync_run(
         if history is None:
             history = DownloadHistory(history_path)
         new_books = [b for b in books if not history.is_downloaded(b.get("isbn", ""))]
-        if limit:
+        if limit and not select_mode:
             new_books = new_books[:limit]
 
         if verbose:
@@ -213,10 +214,26 @@ def sync_run(
             console.print("[green]All caught up! No new books to download.[/green]")
             return SyncRunResult()
 
-        # 5. Select mode branch point (ADR #6 — stub)
+        # 5. Select mode pipeline (ADR #6)
         if select_mode:
-            console.print("[red]--select is not yet implemented.[/red]")
-            return SyncRunResult()
+            if not sys.stdout.isatty():
+                console.print("[red]--select requires an interactive terminal.[/red]")
+                return SyncRunResult(fatal_error="--select requires an interactive terminal")
+
+            from librofm_downloader.book import from_library_row
+            from librofm_downloader.selector import select_books
+            selectable_books = [from_library_row(b) for b in new_books]
+            selected = select_books(selectable_books)
+
+            if not selected:
+                return SyncRunResult()
+
+            if limit and verbose:
+                console.print("[dim]Selection mode active -- --limit superseded by manual selection.[/dim]")
+
+            # Replace new_books with selected Books; orchestrator will
+            # receive pre-converted Book objects.
+            new_books = selected  # type: ignore[assignment]
 
         # 6. Download loop with TTY-aware reporting
         if reporter is None:

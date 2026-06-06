@@ -113,10 +113,15 @@ def download_all_books(
     if not raw_books:
         return OrchestratorResult()
 
-    # Convert raw dicts to Book objects, preserving order and index
-    books_with_index: list[tuple[int, Book]] = [
-        (i, from_library_row(raw)) for i, raw in enumerate(raw_books)
-    ]
+    # Convert raw dicts to Book objects, preserving order and index.
+    # Accept pre-converted Book objects directly to avoid double-conversion
+    # when select mode has already called from_library_row().
+    books_with_index: list[tuple[int, Book]] = []
+    for i, raw in enumerate(raw_books):
+        if isinstance(raw, Book):
+            books_with_index.append((i, raw))
+        else:
+            books_with_index.append((i, from_library_row(raw)))
 
     downloaded_count = 0
     skipped_count = 0

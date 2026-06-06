@@ -952,3 +952,28 @@ class TestOrchestratorUsesBoundCallback:
         # The callables must be exactly the ones the reporter created
         assert cb_a in reporter._callables
         assert cb_b in reporter._callables
+
+
+class TestDownloadAllBooksAcceptsBookObjects:
+    """download_all_books accepts pre-converted Book objects (no double-conversion)."""
+
+    def test_book_objects_skip_from_library_row(self):
+        """Passing Book objects directly works — no need to convert via from_library_row."""
+        book_a = Book(title="Book A", authors=["Auth"], narrators=[], isbn="111")
+        book_b = Book(title="Book B", authors=["Auth"], narrators=[], isbn="222")
+        books = [book_a, book_b]
+
+        downloaded: list[Book] = []
+
+        def fake_download_fn(book: Book, progress=None):
+            downloaded.append(book)
+            return Path(f"/tmp/{book.isbn}.m4b")
+
+        reporter = FakeReporter()
+        result = download_all_books(
+            books, workers=1, download_fn=fake_download_fn, reporter=reporter,
+        )
+
+        assert result.downloaded_count == 2
+        assert result.failed_count == 0
+        assert downloaded == [book_a, book_b]

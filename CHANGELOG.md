@@ -8,12 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
-- **selector:** Add interactive book selection module with
-  `select_books(books) -> list[Book]`. Questionary checkbox prompt
-  (all unchecked by default), confirmation summary with y/N prompt,
-  original-input-order preservation, Ctrl+C propagation via
   `unsafe_ask()`. Row format: `N. Title — Author [Series #N]`.
   9 tests. Closes #47.
+- **sync_run:** Wire `--select` into download pipeline. TTY guard
+  (non-interactive terminals get error exit 1), dict→Book conversion
+  via `from_library_row()`, selected Books pass to orchestrator
+  without double-conversion, `--limit` bypassed with verbose note.
+  6 integration tests. Closes #48.
 
 ### Fixed
 
