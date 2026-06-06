@@ -88,7 +88,7 @@ def _download_one(
 
 
 def download_all_books(
-    raw_books: list[dict],
+    raw_books: list[dict | Book],
     *,
     workers: int,
     download_fn: Callable[[Book], Any],
@@ -99,7 +99,7 @@ def download_all_books(
     """Run downloads for all books using a thread pool.
 
     Args:
-        raw_books: List of raw Libro.fm API book dicts.
+        raw_books: List of raw Libro.fm API book dicts, or pre-converted Book objects.
         workers: Number of parallel worker threads.
         download_fn: Callable accepting a Book, returning Path (success) or None (skipped).
         reporter: Reporter instance with start_download/complete/fail/summary methods.

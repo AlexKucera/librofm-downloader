@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 
-  `unsafe_ask()`. Row format: `N. Title — Author [Series #N]`.
+- **selector:** Add interactive book selection module `selector.py` with
+  `select_books()` (questionary checkbox prompt, confirmation summary) and
+  `_format_row()` helper. Uses `unsafe_ask()` for Ctrl+C propagation.
+  Row format: `N. Title — Author [Series #N]`.
   9 tests. Closes #47.
 - **sync_run:** Wire `--select` into download pipeline. TTY guard
   (non-interactive terminals get error exit 1), dict→Book conversion
