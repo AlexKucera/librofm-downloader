@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **sync_run:** Show --limit-superseded notice unconditionally when
+  `--select` is active. Previously the message was gated behind
+  `--verbose`, so non-verbose users had no indication their flag
+  was silently ignored.
+
 - **downloader:** Fix progress bar exceeding 100% on resumed downloads.
   `Content-Length` from a Range response covers only remaining bytes;
   now adds `resume_from` for the true total.

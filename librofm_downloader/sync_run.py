@@ -228,7 +228,7 @@ def sync_run(
             if not selected:
                 return SyncRunResult()
 
-            if limit and verbose:
+            if limit:
                 console.print("[dim]Selection mode active -- --limit superseded by manual selection.[/dim]")
 
             # Replace new_books with selected Books; orchestrator will
