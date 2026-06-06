@@ -19,7 +19,6 @@ class PlainTextReporter:
 
     def __init__(self, stdout: TextIO | None = None) -> None:
         self._out: TextIO = stdout or sys.stdout
-        self.cancel_event: threading.Event | None = None
 
     def start_download(self, book, total_bytes: int = 0) -> None:
         """Log download start with author, title, and file size."""
@@ -76,6 +75,10 @@ class PlainTextReporter:
                 authors = ", ".join(book.authors) if book.authors else "Unknown"
                 self._print(f"    ⏭ {authors} - {book.title} [{book.isbn}]")
 
+    def chapter_renamed(self, count: int, book_title: str, example_name: str) -> None:
+        """Log chapter rename result with example filename."""
+        self._print(f"  Renamed {count} chapter(s) for '{book_title}' → '{example_name}'")
+
     def _print(self, message: str) -> None:
         self._out.write(message + "\n")
         self._out.flush()
@@ -92,7 +95,6 @@ class ProgressReporter:
         # Per-book identity mapping for concurrent downloads
         self._tasks: dict[int, object] = {}  # task_id -> book
         self._book_ids: dict[int, int] = {}  # id(book) -> task_id
-        self.cancel_event: threading.Event | None = None
 
     def start_download(self, book, total_bytes: int = 0) -> callable:
         """Start a progress bar for this book's download.
@@ -216,6 +218,12 @@ class ProgressReporter:
                 authors = ", ".join(book.authors) if book.authors else "Unknown"
                 self._console.print(f"    ⏭ {authors} - {book.title} [{book.isbn}]")
 
+    def chapter_renamed(self, count: int, book_title: str, example_name: str) -> None:
+        """Log chapter rename result with example filename."""
+        self._console.print(
+            f"  [dim]Renamed[/dim] {count} chapter(s) for "
+            f"'[italic]{book_title}[/italic]' → [cyan]{example_name}[/cyan]"
+        )
 
 def _fmt_size(bytes_val: int) -> str:
     """Format byte count as human-readable size string."""

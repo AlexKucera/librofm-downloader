@@ -20,8 +20,8 @@ from rich.console import Console
 
 from librofm_downloader.book import Book
 from librofm_downloader.config import ConfigError, _resolve_config_file, load_config
-from librofm_downloader.downloader import _write_history, download_book
-from librofm_downloader.history import DownloadHistory
+from librofm_downloader.downloader import download_book
+from librofm_downloader.history import DownloadHistory, _write_history
 from librofm_downloader.orchestrator import OrchestratorResult, download_all_books
 from librofm_downloader.path import resolve_output_plan
 from librofm_downloader.progress import DownloadReporter
@@ -30,28 +30,75 @@ from librofm_downloader.session import AuthError, LibroFmSession
 console = Console()
 
 
+def _print_verbose_config(config, history_path: str, secrets_path: str | None) -> None:
+    """Print resolved config details when verbose mode is on."""
+    console.print("[dim]\u2500\u2500 config \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/dim]")
+    cfg_display = config._config_path if config._config_path else "(built-in defaults)"
+    secrets_display = secrets_path
+    if secrets_path is None:
+        resolved_secrets = _resolve_config_file("secrets.yaml")
+        secrets_display = resolved_secrets or "(not found)"
+    console.print(f"  config:   {cfg_display}")
+    console.print(f"  secrets:  {secrets_display}")
+    console.print(f"  history:  {history_path}")
+    console.print(f"  format:   {config.format}")
+    console.print(f"  output:   {config.output_dir}")
+    console.print(f"  extras:   {config.download_extras}")
+    console.print(f"  covers:   {config.download_covers}")
+    console.print(f"  chapters: {config.rename_chapters}")
+    console.print(f"  user:     {config.username}")
+
+
+def _resolve_history_path(history_path: str | None) -> str:
+    """Resolve history file path: explicit \u2192 XDG search \u2192 XDG default."""
+    if history_path is not None:
+        return history_path
+    resolved = _resolve_config_file("download_history.json")
+    if resolved is not None:
+        return str(resolved)
+    from os import environ
+    home = Path(environ.get("HOME", "~")).expanduser()
+    xdg_dir = home / ".config" / "librofm-downloader"
+    xdg_dir.mkdir(parents=True, exist_ok=True)
+    return str(xdg_dir / "download_history.json")
+
 @dataclass(frozen=True)
 class SyncRunResult:
     """Structured result from a full sync run.
 
-    Attributes:
-        downloaded_count: Books successfully downloaded.
-        skipped_count: Books skipped (download_fn returned None).
-        failed_count: Books that raised an exception.
-        failed_books: List of (book, reason_string) tuples in original order.
-        skipped_books: List of Book objects that were skipped, in original order.
-        interrupted: True if the run was cancelled by Ctrl+C.
-        fatal_error: Non-None if the run stopped before downloads (auth, config, fetch).
+    Wraps an OrchestratorResult (single source of truth for download counts)
+    and adds fatal_error for pipeline-level failures (config, auth, fetch).
+
+    Delegating properties preserve the public interface — callers read
+    .downloaded_count etc. just like before.
     """
 
-    downloaded_count: int = 0
-    skipped_count: int = 0
-    failed_count: int = 0
-    failed_books: list[tuple[Book, str]] = field(default_factory=list)
-    skipped_books: list[Book] = field(default_factory=list)
-    interrupted: bool = False
+    orchestrator_result: OrchestratorResult = field(default_factory=OrchestratorResult)
     fatal_error: str | None = None
 
+    @property
+    def downloaded_count(self) -> int:
+        return self.orchestrator_result.downloaded_count
+
+    @property
+    def skipped_count(self) -> int:
+        return self.orchestrator_result.skipped_count
+
+    @property
+    def failed_count(self) -> int:
+        return self.orchestrator_result.failed_count
+
+    @property
+    def failed_books(self) -> list[tuple[Book, str]]:
+        return self.orchestrator_result.failed_books
+
+    @property
+    def skipped_books(self) -> list[Book]:
+        return self.orchestrator_result.skipped_books
+
+    @property
+    def interrupted(self) -> bool:
+        return self.orchestrator_result.interrupted
 
 def sync_run(
     config_path: str | None = None,
@@ -60,8 +107,13 @@ def sync_run(
     verbose: bool = False,
     limit: int = 0,
     workers: int = 0,
+    rename_chapters: bool = False,
     *,
     select_mode: bool = False,
+    session: LibroFmSession | None = None,
+    history: DownloadHistory | None = None,
+    reporter: DownloadReporter | None = None,
+    download_all_fn: Callable | None = None,
 ) -> SyncRunResult:
     """Main pipeline: load config → auth → fetch library → filter → download → summary.
 
@@ -80,17 +132,7 @@ def sync_run(
 
     try:
         # 0. Resolve history path (XDG → CWD, default to XDG location)
-        if history_path is None:
-            resolved = _resolve_config_file("download_history.json")
-            if resolved is not None:
-                history_path = str(resolved)
-            else:
-                from os import environ
-
-                home = Path(environ.get("HOME", "~")).expanduser()
-                xdg_dir = home / ".config" / "librofm-downloader"
-                xdg_dir.mkdir(parents=True, exist_ok=True)
-                history_path = str(xdg_dir / "download_history.json")
+        history_path = _resolve_history_path(history_path)
 
         # 1. Load config
         try:
@@ -109,45 +151,36 @@ def sync_run(
             return SyncRunResult(fatal_error=f"Config error: {exc}")
 
         if verbose:
-            console.print("[dim]── config ──────────────────────────────────────[/dim]")
-            cfg_display = config._config_path if config._config_path else "(built-in defaults)"
-            # Determine resolved secrets path
-            secrets_display = secrets_path
-            if secrets_path is None:
-                resolved_secrets = _resolve_config_file("secrets.yaml")
-                secrets_display = resolved_secrets or "(not found)"
-            console.print(f"  config:   {cfg_display}")
-            console.print(f"  secrets:  {secrets_display}")
-            console.print(f"  history:  {history_path}")
-            console.print(f"  format:   {config.format}")
-            console.print(f"  output:   {config.output_dir}")
-            console.print(f"  extras:   {config.download_extras}")
-            console.print(f"  covers:   {config.download_covers}")
-            console.print(f"  user:     {config.username}")
+            _print_verbose_config(config, history_path, secrets_path)
 
         # Resolve workers: CLI flag (>0?) → config.workers → default 3
         resolved_workers = workers if workers > 0 else config.workers
         if resolved_workers < 1:
             resolved_workers = 3
-            console.print(f"  user:     {config.username}")
 
-        # 2. Authenticate
-        if verbose:
-            console.print("[dim]── auth ────────────────────────────────────────[/dim]")
+        # Resolve rename_chapters: CLI flag (True?) → config.rename_chapters
+        resolved_rename_chapters = rename_chapters or config.rename_chapters
 
-        client = LibroFmSession(
-            username=config.username,
-            password=config.password,
-        )
+        # 2. Authenticate (or use injected session)
+        if session is not None:
+            client = session
+        else:
+            if verbose:
+                console.print("[dim]── auth ────────────────────────────────────────[/dim]")
 
-        try:
-            client.authenticate()
-        except AuthError as exc:
-            console.print(f"[red]Authentication failed:[/red] {exc}")
-            return SyncRunResult(fatal_error=f"Authentication failed: {exc}")
+            client = LibroFmSession(
+                username=config.username,
+                password=config.password,
+            )
 
-        if verbose:
-            console.print("  [green]✓[/green] authenticated")
+            try:
+                client.authenticate()
+            except AuthError as exc:
+                console.print(f"[red]Authentication failed:[/red] {exc}")
+                return SyncRunResult(fatal_error=f"Authentication failed: {exc}")
+
+            if verbose:
+                console.print("  [green]✓[/green] authenticated")
 
         # 3. Fetch library
         if verbose:
@@ -166,7 +199,8 @@ def sync_run(
         if verbose:
             console.print("[dim]── filtering ───────────────────────────────────[/dim]")
 
-        history = DownloadHistory(history_path)
+        if history is None:
+            history = DownloadHistory(history_path)
         new_books = [b for b in books if not history.is_downloaded(b.get("isbn", ""))]
         if limit:
             new_books = new_books[:limit]
@@ -185,33 +219,33 @@ def sync_run(
             return SyncRunResult()
 
         # 6. Download loop with TTY-aware reporting
-        reporter = DownloadReporter()
+        if reporter is None:
+            reporter = DownloadReporter()
         cancel_event = threading.Event()
-        reporter.cancel_event = cancel_event
+        # cancel_event passed explicitly via closure to download_book() (Issue #39)
         console.print(f"\n[bold]{len(new_books)} book(s) to download:[/bold]\n")
 
         # --- Download loop (parallel via orchestrator — Issue #16) ---
 
-        def _make_download_fn():
-            """Closure capturing session, config, history, reporter for each book."""
-
+        def _make_download_fn(
+            _config, _client, _history, _reporter, _cancel_event, _rename_chapters,
+        ):
             def _download_fn(
                 book: Book, *, progress: Callable[[int], None] | None = None
             ):
                 # Build output plan for this book (paths + format strategy)
                 plan = resolve_output_plan(
                     book,
-                    config.output_dir,
-                    config=config,
-                    format_strategy=config.format,
+                    _config.output_dir,
+                    config=_config,
+                    format_strategy=_config.format,
                 )
-
-                result = download_book(book, client, plan, reporter, progress=progress)
+                result = download_book(book, _client, plan, _reporter, progress=progress, rename_chapters=_rename_chapters, cancel_event=_cancel_event)
 
                 # Write history as caller (no longer inside download_book)
                 if result.status == "downloaded":
                     _write_history(
-                        history, book, result.format or "m4b", str(result.path)
+                        _history, book, result.format or "m4b", str(result.path)
                     )
 
                 # Return Path | None for backward compat with orchestrator
@@ -221,50 +255,31 @@ def sync_run(
 
             return _download_fn
 
-        result = download_all_books(
+        _download_all = download_all_fn or download_all_books
+        result = _download_all(
             new_books,
             workers=resolved_workers,
-            download_fn=_make_download_fn(),
+            download_fn=_make_download_fn(config, client, history, reporter, cancel_event, resolved_rename_chapters),
             reporter=reporter,
             cancel_event=cancel_event,
         )
 
-        downloaded = result.downloaded_count
-        skipped = result.skipped_count
-        failed = result.failed_count
-        failed_books = result.failed_books
-        skipped_books = result.skipped_books
-
         reporter.summary(
-            downloaded=downloaded,
-            skipped=skipped,
-            failed=failed,
-            failed_books=failed_books,
-            skipped_books=skipped_books,
+            downloaded=result.downloaded_count,
+            skipped=result.skipped_count,
+            failed=result.failed_count,
+            failed_books=result.failed_books,
+            skipped_books=result.skipped_books,
         )
 
         if result.interrupted:
-            return SyncRunResult(
-                downloaded_count=downloaded,
-                skipped_count=skipped,
-                failed_count=failed,
-                failed_books=failed_books,
-                skipped_books=skipped_books,
-                interrupted=True,
-            )
+            return SyncRunResult(orchestrator_result=result)
 
         if verbose:
             console.print("[dim]── done ────────────────────────────────────────[/dim]")
 
-        return SyncRunResult(
-            downloaded_count=downloaded,
-            skipped_count=skipped,
-            failed_count=failed,
-            failed_books=failed_books,
-            skipped_books=skipped_books,
-            interrupted=False,
-        )
+        return SyncRunResult(orchestrator_result=result)
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Download interrupted by user (Ctrl+C).[/yellow]")
-        return SyncRunResult(interrupted=True)
+        return SyncRunResult(orchestrator_result=OrchestratorResult(interrupted=True))

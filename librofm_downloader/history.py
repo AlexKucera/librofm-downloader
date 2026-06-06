@@ -6,6 +6,8 @@ import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+from librofm_downloader.book import Book  # noqa: F401 — used in _write_history() type hints
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,3 +67,26 @@ class DownloadHistory:
             json.dumps(self._data, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+
+def _write_history(
+    history: "DownloadHistory",
+    book: "Book",
+    fmt: str,
+    path: str,
+) -> None:
+    """Write a download history entry.
+
+    Relocated from downloader.py (Issue #40) — this is a persistence
+    helper that belongs with the history module, not the download engine.
+    """
+    from datetime import datetime, timezone
+
+    entry = HistoryEntry(
+        isbn=book.isbn,
+        title=book.title,
+        format=fmt,
+        path=path,
+        downloaded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    history.write(entry)

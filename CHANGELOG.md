@@ -5,10 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-8:6af|## [Unreleased]
+## [Unreleased]
+### Fixed
 
+- **downloader:** Fix progress bar exceeding 100% on resumed downloads.
+  `Content-Length` from a Range response covers only remaining bytes;
+  now adds `resume_from` for the true total.
+- **session:** Stop reaching into `httpx.Client._transport` (private API).
+  Transport reference is now stored at construction time.
+
+### Added
+
+- **downloader:** Add `rename_chapters()` function to rename extracted MP3
+  files with chapter titles from the download manifest. Natural sort by
+  numeric prefix, auto zero-padding, null/blank title fallback, sanitization
+  via existing `sanitize()`. 11 tests. Closes #32.
+
+- **config:** Add `rename_chapters` boolean field to Config dataclass with default
+  `True`. Read from YAML config, threaded through CLI (`--rename-chapters` flag)
+  and `sync_run()` resolution (CLI True → config value). 5 new tests, 223 total.
+  Closes #33.
+
+- **downloader:** Wire `rename_chapters()` into download pipeline.
+  `_download_mp3()` returns `(output_dir, tracks)` tuple; `download_book()`
+  accepts `rename_chapters` kwarg; new `_rename_and_log()` helper calls rename
+  and reports via `reporter.chapter_renamed()`. Both reporters show visible
+  feedback: "Renamed N chapter(s) for 'Book' → 'example.mp3'".
+  `sync_run.py` closure threads resolved flag through to `download_book()`.
+  6 new integration tests, ~229 total. Closes #34.
 
 ### Refactored
+
+- **cancel:** Thread `cancel_event` explicitly through parameter chain
+  (`sync_run` → `download_book()` → streaming calls) instead of stashing
+  it on reporter objects as shared state. Remove `cancel_event` attribute from
+  both `PlainTextReporter` and `ProgressReporter`. 429 tests (+5 net).
+  Closes #39.
+
+- **session:** Expose public `transport` property on `LibroFmSession` returning
+  the underlying httpx transport. Update sole call site in `downloader.py` from
+  `session._client._transport` to `session.transport`. 2 new tests, 425 total.
+  Closes #38.
+
+- **downloader:** Extract `_stream_to_file()` private helper from the
+  duplicated ~30-line chunked-download loop in `download_m4b()`,
+  `download_zip_part()`, `_download_cover()`, and `_download_pdf()`. All
+  four callers are now thin wrappers that delegate streaming to the
+  shared helper. 5 new TDD tests (fresh download, resume, cancel
+  mid-stream, progress callback, error propagation). 224 total tests.
+  Net -22 lines in downloader.py. Closes #41.
+
 
 - **session:** Rename LibroFmClient → LibroFmSession, relocate to
   session.py, inject transport at construction time. Old client.py is now

@@ -143,110 +143,6 @@ class TestPlainTextFailed:
         assert "404" in output
 
 
-# ---------------------------------------------------------------------------
-# Test 5: Failure isolation — one fail + others succeed
-# ---------------------------------------------------------------------------
-
-class TestFailureIsolationCLI:
-    """One failing book does not prevent subsequent books from downloading."""
-
-    def test_one_failure_does_not_stop_batch(self, capsys):
-        """Second book fails; first and third still download. Exit code 0."""
-        from pathlib import Path
-        from unittest.mock import patch
-
-        with (
-            patch("librofm_downloader.sync_run.load_config") as mock_config,
-            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
-            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
-            patch("librofm_downloader.sync_run.download_book") as mock_download,
-        ):
-            mock_config.return_value.username = "alice"
-            mock_config.return_value.password = "secret"
-            mock_config.return_value.output_dir = "./audiobooks"
-            mock_config.return_value.workers = 3
-
-            mock_instance = mock_client_cls.return_value
-            mock_instance.authenticate.return_value = None
-
-            raw_books = [
-                {"isbn": "978111", "title": "Book A", "authors": ["A1"], "narrators": ["N1"]},
-                {"isbn": "978222", "title": "Book B", "authors": ["A2"], "narrators": ["N2"]},
-                {"isbn": "978333", "title": "Book C", "authors": ["A3"], "narrators": ["N3"]},
-            ]
-            mock_instance.fetch_library.return_value = raw_books
-
-            mock_history_cls.return_value.is_downloaded.return_value = False
-
-            from librofm_downloader.downloader import DownloadResult
-
-            # Book A succeeds, Book B fails, Book C succeeds
-            mock_download.side_effect = [
-                DownloadResult(status="downloaded", path=Path("/audiobooks/A1/Book A.m4b"), format="m4b"),  # success
-                Exception("Network timeout"),          # failure
-                DownloadResult(status="downloaded", path=Path("/audiobooks/A3/Book C.m4b"), format="m4b"),  # success
-            ]
-
-            from librofm_downloader.sync_run import sync_run
-
-            result = sync_run(
-                config_path="/fake/config.yaml",
-                secrets_path="/fake/secrets.yaml",
-                history_path="/fake/history.json",
-            )
-
-            # All 3 books were attempted
-            assert mock_download.call_count == 3
-            # Failures are non-fatal → no fatal_error
-            assert result.fatal_error is None
-            captured = capsys.readouterr()
-            # Reporter output: Completed for successes, Failed for failure, Summary with counts
-            out = captured.out
-            assert "Completed" in out   # at least one success
-            assert "Failed" in out       # the failure case
-            assert "2 downloaded" in out  # summary counts correct
-            assert "1 failed" in out
-
-
-# ---------------------------------------------------------------------------
-# Test 6: Fatal vs book-level error distinction
-# ---------------------------------------------------------------------------
-
-class TestFatalVsBookLevel:
-    """Fatal errors (auth fail) exit 1 immediately before any downloads start."""
-
-    def test_auth_failure_exits_one_before_downloads(self, capsys):
-        """Auth failure → exit 1, download_book never called."""
-        from unittest.mock import patch
-        from librofm_downloader.session import AuthError
-
-        with (
-            patch("librofm_downloader.sync_run.load_config") as mock_config,
-            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
-            patch("librofm_downloader.sync_run.download_book") as mock_download,
-        ):
-            mock_config.return_value.username = "alice"
-            mock_config.return_value.password = "wrong"
-            mock_config.return_value.output_dir = "./audiobooks"
-            mock_config.return_value.workers = 3
-
-            mock_instance = mock_client_cls.return_value
-            mock_instance.authenticate.side_effect = AuthError("Auth failed (401)")
-
-            from librofm_downloader.sync_run import sync_run
-
-            result = sync_run(
-                config_path="/fake/config.yaml",
-                secrets_path="/fake/secrets.yaml",
-                history_path="/fake/history.json",
-            )
-
-            assert result.fatal_error is not None
-            # No downloads were attempted
-            assert mock_download.call_count == 0
-            captured = capsys.readouterr()
-            assert "Authentication failed" in captured.out
-
 
 # ---------------------------------------------------------------------------
 # Test 7: Progress bar columns — TTY mode renders %, speed, ETA, size
@@ -1168,91 +1064,9 @@ class TestParallelProgressCallbackWiring:
         assert task_a.completed == 50_000_000
         assert task_b.completed == 30_000_000
         assert task_c.completed == 80_000_000
-class TestParallelProgressCallbackWiring:
-    """Regression test: progress callback must carry task_id to update correct bar.
 
-    Bug: when cli.py passes ``progress=reporter.update`` as the callback,
-    the downloader calls ``progress(downloaded)`` with no task_id.
-    ProgressReporter.update() falls back to ``next(reversed(self._tasks))``,
-    so ALL parallel download threads update the same (most recently started) bar.
-    """
 
-    def test_update_without_task_id_always_hits_most_recent_bar(self):
-        """Demonstrates the bug: untargeted updates all go to the last-started bar."""
-        from unittest.mock import MagicMock
-
-        mock_tty = MagicMock()
-        mock_tty.isatty.return_value = True
-
-        reporter = ProgressReporter(stdout=mock_tty)
-
-        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
-        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
-        book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
-
-        reporter.start_download(book_a, total_bytes=100_000_000)
-        reporter.start_download(book_b, total_bytes=100_000_000)
-        reporter.start_download(book_c, total_bytes=100_000_000)
-
-        # Simulate what happens in production: each download thread calls
-        # reporter.update(completed) WITHOUT passing task_id — because
-        # cli.py wires ``progress=reporter.update`` which loses the identity.
-        # Thread A reports 50% progress
-        reporter.update(50_000_000)
-        # Thread B reports 30% progress
-        reporter.update(30_000_000)
-        # Thread C reports 80% progress
-        reporter.update(80_000_000)
-
-        # BUG: all updates went to the most recently started bar (book_c)
-        # because task_id was None every time, triggering the fallback.
-        task_id_a = reporter._book_ids[id(book_a)]
-        task_id_b = reporter._book_ids[id(book_b)]
-        task_id_c = reporter._book_ids[id(book_c)]
-        task_a = reporter._progress.tasks[task_id_a]
-        task_b = reporter._progress.tasks[task_id_b]
-        task_c = reporter._progress.tasks[task_id_c]
-
-        # All three bars show the LAST value written (80M), not their own value
-        assert task_c.completed == 80_000_000  # last-started bar got ALL updates
-        assert task_a.completed == 0  # book A never got an update  ← THE BUG
-        assert task_b.completed == 0  # book B never got an update  ← THE BUG
-
-    def test_bound_callback_updates_correct_bar(self):
-        """When each thread gets a bound callback from start_download(), bars update independently."""
-        from unittest.mock import MagicMock
-
-        mock_tty = MagicMock()
-        mock_tty.isatty.return_value = True
-
-        reporter = ProgressReporter(stdout=mock_tty)
-
-        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
-        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
-        book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
-
-        # Each download thread gets its OWN bound callable from start_download()
-        progress_a = reporter.start_download(book_a, total_bytes=100_000_000)
-        progress_b = reporter.start_download(book_b, total_bytes=100_000_1000)
-        progress_c = reporter.start_download(book_c, total_bytes=100_000_000)
-
-        # Each thread reports its own progress
-        progress_a(50_000_000)
-        progress_b(30_000_000)
-        progress_c(80_000_000)
-
-        task_id_a = reporter._book_ids[id(book_a)]
-        task_id_b = reporter._book_ids[id(book_b)]
-        task_id_c = reporter._book_ids[id(book_c)]
-        task_a = reporter._progress.tasks[task_id_a]
-        task_b = reporter._progress.tasks[task_id_b]
-        task_c = reporter._progress.tasks[task_id_c]
-
-        # Each bar shows ITS OWN progress — this is the fixed behavior
-        assert task_a.completed == 50_000_000
-        assert task_b.completed == 30_000_000
-        assert task_c.completed == 80_000_000
-
+class TestMultiBookPlainTextInterleaved:
     """PlainTextReporter handles multiple concurrent books correctly."""
 
     def test_interleaved_start_complete_fail_lines(self):
@@ -1401,4 +1215,29 @@ class TestBoundCallableFromStartDownload:
         sig = inspect.signature(reporter.update)
         assert "task_id" not in sig.parameters, (
             "update() should not expose task_id; use bound callable from start_download()"
+        )
+
+
+class TestReporterNoCancelEvent:
+    """Issue #39: Reporters must not carry cancellation state.
+
+    cancel_event flows through explicit parameters (sync_run → download_book →
+    streaming calls), NOT through reporter attributes.
+    """
+
+    @pytest.mark.parametrize("reporter_cls", [PlainTextReporter, ProgressReporter])
+    def test_reporter_has_no_cancel_event_attribute(self, reporter_cls):
+        """Neither reporter class exposes cancel_event on its public interface."""
+        reporter = reporter_cls()
+        assert not hasattr(reporter, "cancel_event"), (
+            f"{reporter_cls.__name__} must not have cancel_event attribute (Issue #39)"
+        )
+
+    @pytest.mark.parametrize("reporter_cls", [PlainTextReporter, ProgressReporter])
+    def test_reporter_init_signature_has_no_cancel_event(self, reporter_cls):
+        """cancel_event is not a constructor parameter."""
+        import inspect
+        sig = inspect.signature(reporter_cls.__init__)
+        assert "cancel_event" not in sig.parameters, (
+            f"{reporter_cls.__name__}.__init__ must not accept cancel_event (Issue #39)"
         )

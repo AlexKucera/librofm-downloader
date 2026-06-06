@@ -2,26 +2,30 @@
 
 import httpx
 import pytest
+import threading
 import unittest
 from pathlib import Path
 import tempfile
 
 from librofm_downloader.book import Book
 from librofm_downloader.path import (
-    sanitize,
-    resolve_path,
-    needs_subdirectory,
     _resolve_output_dir,
     OutputPlan,
     resolve_output_plan,
+    needs_subdirectory,
+    resolve_path,
+    sanitize,
 )
+from librofm_downloader.history import _write_history
 from librofm_downloader.downloader import (
     DownloadResult,
-    _write_history,
+    InterruptedDownload,
+    _stream_to_file,
     download_m4b,
     download_zip_part,
     download_book,
     download_accompanying_files,
+    rename_chapters,
 )
 from librofm_downloader.progress import DownloadReporter
 from librofm_downloader.session import LibroFmSession
@@ -176,7 +180,6 @@ class TestDownloadBookNewInterface:
 
         book = Book(title="Callback Test", authors=["Author"], narrators=["N"], isbn="9789900000000")
         reporter = MagicMock()
-        reporter.cancel_event = None
 
         with tempfile.TemporaryDirectory() as tmpdir:
             plan = resolve_output_plan(book, Path(tmpdir), format_strategy="m4b_only")
@@ -187,415 +190,6 @@ class TestDownloadBookNewInterface:
             assert len(received) >= 1, "Bound callback should receive progress updates"
             # reporter.update should NOT have been called
             reporter.update.assert_not_called()
-
-class TestSanitizeIllegalChars:
-    """Sanitization strips characters that are unsafe in filesystem paths."""
-
-    def test_strips_angle_brackets(self):
-        assert sanitize("Foo<Bar>") == "FooBar"
-
-    def test_strips_forward_slash(self):
-        assert sanitize("Foo/Bar") == "FooBar"
-
-    def test_strips_backslash(self):
-        assert sanitize("Foo\\Bar") == "FooBar"
-
-    def test_strips_pipe(self):
-        assert sanitize("Foo|Bar") == "FooBar"
-
-    def test_strips_question_mark(self):
-        assert sanitize("Foo?Bar") == "FooBar"
-
-    def test_strips_asterisk(self):
-        assert sanitize("Foo*Bar") == "FooBar"
-
-
-class TestSanitizeColonReplacement:
-    """Colons are replaced with ' -' (space-dash), not stripped."""
-
-    def test_single_colon_replaced(self):
-        assert sanitize("Part A: Part B") == "Part A - Part B"
-
-    def test_multiple_colons_replaced(self):
-        assert sanitize("A:B:C") == "A -B -C"
-
-    def test_colon_with_illegal_chars(self):
-        # Colon replaced first, then illegal chars stripped
-        assert sanitize("Foo:<>Bar") == "Foo -Bar"
-
-
-class TestSanitizeControlChars:
-    """Control characters U+0000–U+001F are stripped."""
-
-    def test_strips_null_byte(self):
-        assert sanitize("Foo\x00Bar") == "FooBar"
-
-    def test_strips_tab(self):
-        assert sanitize("Foo\tBar") == "FooBar"
-
-    def test_strips_newline(self):
-        assert sanitize("Foo\nBar") == "FooBar"
-
-    def test_strips_carriage_return(self):
-        assert sanitize("Foo\rBar") == "FooBar"
-
-    def test_strips_multiple_control_chars(self):
-        assert sanitize("\x01\x02Hello\x1F\x1E") == "Hello"
-
-
-class TestSanitizeTrailingDots:
-    """Trailing dots are removed (problematic on Windows)."""
-
-    def test_removes_single_trailing_dot(self):
-        assert sanitize("filename.") == "filename"
-
-    def test_removes_multiple_trailing_dots(self):
-        assert sanitize("filename...") == "filename"
-
-    def test_preserves_internal_dots(self):
-        assert sanitize("file.name.txt") == "file.name.txt"
-
-    def test_trailing_dot_after_whitespace_trim(self):
-        assert sanitize("  filename.  ") == "filename"
-
-
-class TestSanitizeTrimWhitespace:
-    """Leading and trailing whitespace is trimmed."""
-
-    def test_trims_leading_space(self):
-        assert sanitize("  filename") == "filename"
-
-    def test_trims_trailing_space(self):
-        assert sanitize("filename  ") == "filename"
-
-    def test_trims_both_ends(self):
-        assert sanitize("  filename  ") == "filename"
-
-    def test_preserves_internal_spaces(self):
-        assert sanitize("my filename") == "my filename"
-
-
-class TestSanitizeLengthCap:
-    """Components are capped at 255 characters."""
-
-    def test_short_string_unchanged(self):
-        short = "a" * 100
-        assert sanitize(short) == short
-
-    def test_capped_at_255_chars(self):
-        long = "a" * 300
-        assert len(sanitize(long)) == 255
-
-    def test_exact_255_unchanged(self):
-        exact = "a" * 255
-        assert len(sanitize(exact)) == 255
-
-
-class TestSanitizePreservedChars:
-    """Safe characters that must be preserved through sanitization."""
-
-    def test_preserves_dashes(self):
-        assert sanitize("some-name") == "some-name"
-
-    def test_preserves_commas(self):
-        assert sanitize("Last, First") == "Last, First"
-
-    def test_preserves_apostrophes(self):
-        assert sanitize("O'Brien") == "O'Brien"
-
-    def test_preserves_parentheses(self):
-        assert sanitize("Book (subtitle)") == "Book (subtitle)"
-
-    def test_preserves_internal_periods(self):
-        assert sanitize("Dr. Jekyll") == "Dr. Jekyll"
-
-    def test_combined_safe_and_unsafe(self):
-        assert sanitize("O'Brien, Pat (Author): A Life*") == "O'Brien, Pat (Author) - A Life"
-
-
-class TestSanitizeEdgeCases:
-    """Edge cases: empty strings, unicode, all-illegal input."""
-
-    def test_empty_string_returns_empty(self):
-        assert sanitize("") == ""
-
-    def test_only_illegal_chars_returns_empty(self):
-        assert sanitize("<>/\\|?*") == ""
-
-    def test_only_whitespace_returns_empty(self):
-        assert sanitize("   ") == ""
-
-    def test_unicode_preserved(self):
-        assert sanitize("日本語タイトル") == "日本語タイトル"
-
-    def test_unicode_with_illegal_ascii(self):
-        assert sanitize("日本語<title>") == "日本語title"
-
-
-# ---------------------------------------------------------------------------
-# Default path resolution
-# ---------------------------------------------------------------------------
-
-class TestDefaultPathSeriesWithNumber:
-    """Book with series AND series_num: Author/Series/Book N Title."""
-
-    def test_basic_series_with_number(self):
-        book = Book(
-            title="The Final Empire",
-            authors=["Brandon Sanderson"],
-            narrators=["Michael Kramer"],
-            isbn="9780765374991",
-            series="Mistborn",
-            series_num=1,
-        )
-        path = resolve_path(book)
-        assert path == "Brandon Sanderson/Mistborn/Book 1 The Final Empire"
-
-    def test_sanitizes_author_name(self):
-        book = Book(
-            title="The Final Empire",
-            authors=["O'Brien, Brandon <Author>"],
-            narrators=["Michael Kramer"],
-            isbn="9780765374991",
-            series="Mistborn: Era 1",
-            series_num=1,
-        )
-        path = resolve_path(book)
-        # Angle brackets stripped from author, colon replaced in series
-        assert path == "O'Brien, Brandon Author/Mistborn - Era 1/Book 1 The Final Empire"
-
-    def test_sanitizes_series_and_title(self):
-        book = Book(
-            title="The Way of Kings (Book 1)",
-            authors=["Brandon Sanderson"],
-            narrators=["Kate Reading", "Michael Kramer"],
-            isbn="9780765398270",
-            series="Stormlight Archive*",
-            series_num=1,
-        )
-        path = resolve_path(book)
-        assert path == "Brandon Sanderson/Stormlight Archive/Book 1 The Way of Kings (Book 1)"
-
-
-class TestDefaultPathSeriesWithoutNumber:
-    """Book with series but no series_num: Author/Series/Title."""
-
-    def test_basic_series_no_number(self):
-        book = Book(
-            title="Warbreaker",
-            authors=["Brandon Sanderson"],
-            narrators=["Alyssa Bresnahan"],
-            isbn="9781433232829",
-            series="Cosmere: Standalones",
-            series_num=None,
-        )
-        path = resolve_path(book)
-        assert path == "Brandon Sanderson/Cosmere - Standalones/Warbreaker"
-
-
-class TestDefaultPathNoSeries:
-    """Book without series: Author/Title."""
-
-    def test_standalone_book(self):
-        book = Book(
-            title="Skyward",
-            authors=["Brandon Sanderson"],
-            narrators=["Sophie Aldred"],
-            isbn="9781509697815",
-            series="",
-            series_num=None,
-        )
-        path = resolve_path(book)
-        assert path == "Brandon Sanderson/Skyward"
-
-
-class TestCustomPathPattern:
-    """Custom path_pattern with token substitution overrides default logic."""
-
-    def test_basic_custom_pattern(self):
-        book = Book(
-            title="The Final Empire",
-            authors=["Brandon Sanderson"],
-            narrators=["Michael Kramer"],
-            isbn="9780765374991",
-            series="Mistborn",
-            series_num=1,
-        )
-        pattern = "{FIRST_AUTHOR}/{SERIES_NAME}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "Brandon Sanderson/Mistborn/The Final Empire"
-
-    def test_custom_pattern_overrides_default(self):
-        """When pattern is set, default conditional logic is NOT used."""
-        book = Book(
-            title="The Final Empire",
-            authors=["Brandon Sanderson"],
-            narrators=["Michael Kramer"],
-            isbn="9780765374991",
-            series="Mistborn",
-            series_num=1,
-        )
-        # Custom pattern without series_num — should NOT get "Book 1" prefix
-        pattern = "{FIRST_AUTHOR}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "Brandon Sanderson/The Final Empire"
-
-    def test_all_authors_token(self):
-        book = Book(
-            title="Good Omens",
-            authors=["Neil Gaiman", "Terry Pratchett"],
-            narrators=["Martin Jarvis", "Stephen Briggs"],
-            isbn="9780062982360",
-        )
-        pattern = "{ALL_AUTHORS}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "Neil Gaiman, Terry Pratchett/Good Omens"
-
-    def test_series_num_token(self):
-        book = Book(
-            title="The Final Empire",
-            authors=["Brandon Sanderson"],
-            narrators=["Michael Kramer"],
-            isbn="9780765374991",
-            series="Mistborn",
-            series_num=1,
-        )
-        pattern = "{SERIES_NAME} {SERIES_NUM} - {BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "Mistborn 1 - The Final Empire"
-
-    def test_isbn_token(self):
-        book = Book(
-            title="The Final Empire",
-            authors=["Brandon Sanderson"],
-            narrators=["Michael Kramer"],
-            isbn="9780765374991",
-        )
-        pattern = "{ISBN}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "9780765374991/The Final Empire"
-
-    def test_narrator_tokens(self):
-        book = Book(
-            title="Good Omens",
-            authors=["Neil Gaiman"],
-            narrators=["Martin Jarvis", "Stephen Briggs"],
-            isbn="9780062982360",
-        )
-        pattern = "{FIRST_AUTHOR} - {FIRST_NARRATOR}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "Neil Gaiman - Martin Jarvis/Good Omens"
-
-    def test_all_narrators_token(self):
-        book = Book(
-            title="Good Omens",
-            authors=["Neil Gaiman"],
-            narrators=["Martin Jarvis", "Stephen Briggs"],
-            isbn="9780062982360",
-        )
-        pattern = "{ALL_NARRATORS}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "Martin Jarvis, Stephen Briggs/Good Omens"
-
-    def test_publication_date_tokens(self):
-        book = Book(
-            title="The Final Empire",
-            authors=["Brandon Sanderson"],
-            narrators=["Michael Kramer"],
-            isbn="9780765374991",
-            publication_year=2006,
-            publication_month=7,
-            publication_day=17,
-        )
-        pattern = "{PUBLICATION_YEAR}/{PUBLICATION_MONTH}/{PUBLICATION_DAY}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "2006/7/17/The Final Empire"
-
-    def test_missing_optional_tokens_omitted(self):
-        """Tokens with no value produce empty string (not error)."""
-        book = Book(
-            title="Standalone",
-            authors=["Some Author"],
-            narrators=[],
-            isbn="9780000000001",
-        )
-        pattern = "{SERIES_NAME}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "/Standalone"
-
-    def test_sanitizes_custom_pattern_output(self):
-        book = Book(
-            title="Book: A Subtitle<Extra>",
-            authors=["O'Brien, Author"],
-            narrators=["Narrator"],
-            isbn="9780000000001",
-        )
-        pattern = "{FIRST_AUTHOR}/{BOOK_TITLE}"
-        path = resolve_path(book, pattern=pattern)
-        assert path == "O'Brien, Author/Book - A SubtitleExtra"
-
-
-# ---------------------------------------------------------------------------
-# Subdirectory decision
-# ---------------------------------------------------------------------------
-
-class TestNeedsSubdirectory:
-    """Subdirectory is needed when PDF extras or cover art are present."""
-
-    def test_true_when_pdf_extras_present(self):
-        book = Book(
-            title="Some Book",
-            authors=["Author"],
-            narrators=["Narrator"],
-            isbn="9780000000001",
-            pdf_extras=True,
-            cover_url="",
-        )
-        assert needs_subdirectory(book) is True
-
-    def test_false_when_cover_url_only(self):
-        """cover_url alone does NOT trigger subdirectory — config-gated."""
-        book = Book(
-            title="Some Book",
-            authors=["Author"],
-            narrators=["Narrator"],
-            isbn="9780000000001",
-            pdf_extras=False,
-            cover_url="https://example.com/cover.jpg",
-        )
-        assert needs_subdirectory(book) is False
-
-    def test_true_when_both_present(self):
-        book = Book(
-            title="Some Book",
-            authors=["Author"],
-            narrators=["Narrator"],
-            isbn="9780000000001",
-            pdf_extras=True,
-            cover_url="https://example.com/cover.jpg",
-        )
-        assert needs_subdirectory(book) is True
-
-    def test_false_when_neither_present(self):
-        book = Book(
-            title="Some Book",
-            authors=["Author"],
-            narrators=["Narrator"],
-            isbn="9780000000001",
-            pdf_extras=False,
-            cover_url="",
-        )
-        assert needs_subdirectory(book) is False
-
-    def test_false_with_defaults(self):
-        """Book created with default fields (no extras, no cover)."""
-        book = Book(
-            title="Some Book",
-            authors=["Author"],
-            narrators=["Narrator"],
-            isbn="9780000000001",
-        )
-        assert needs_subdirectory(book) is False
 
 
 # ---------------------------------------------------------------------------
@@ -892,6 +486,65 @@ class TestCooperativeCancellation:
     for shutdown(wait=True) to complete full futures, each download loop checks
     a threading.Event between 8 MB chunks and raises InterruptedDownload.
     """
+
+    def test_download_book_forwards_cancel_event(self):
+        """download_book() accepts cancel_event explicitly and forwards it.
+
+        Regression test for Issue #39: cancel_event must flow through the
+        explicit parameter chain (sync_run → download_book → streaming calls),
+        NOT through reporter.cancel_event.
+        """
+        import threading
+        import time
+
+        cancel_event = threading.Event()
+
+        from librofm_downloader.downloader import CHUNK_SIZE
+
+        # Payload > CHUNK_SIZE so iter_bytes produces multiple chunks,
+        # giving the cancel check a chance to fire mid-stream.
+        payload = b"\x00" * (CHUNK_SIZE + 1024)
+
+        def handler(request):
+            if "/oauth/token" in request.url.path:
+                return httpx.Response(200, json={"access_token": "tok", "token_type": "bearer"})
+            if "/audiobooks/" in request.url.path and "packaged_m4b" in request.url.path:
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/book.m4b"})
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=payload, headers={"Content-Length": str(len(payload))})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        session = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        session.authenticate()
+
+        from unittest.mock import MagicMock
+        from librofm_downloader.downloader import InterruptedDownload
+
+        book = Book(title="Cancel Test", authors=["Author"], narrators=["N"], isbn="9789900000001")
+        reporter = MagicMock()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = resolve_output_plan(book, Path(tmpdir), format_strategy="m4b_only")
+
+            # Set cancel_event shortly after download starts so the chunk loop
+            # sees it between iterations.
+            def set_cancel_soon():
+                time.sleep(0)  # yield to ensure thread runs before download starts
+                cancel_event.set()
+
+            t = threading.Thread(target=set_cancel_soon, daemon=True)
+            t.start()
+            try:
+                download_book(
+                    book, session, plan, reporter,
+                    cancel_event=cancel_event,
+                )
+                assert False, "Expected InterruptedDownload"
+            except InterruptedDownload:
+                pass
+
+            t.join(timeout=2)
 
     def test_m4b_raises_interrupted_when_cancelled_mid_download(self):
         """download_m4b raises InterruptedDownload when cancel_event is set mid-stream.
@@ -1505,6 +1158,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1543,6 +1197,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             # Create a mock client that returns a PDF URL
@@ -1585,6 +1240,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1620,6 +1276,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=False, download_covers=True,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1649,6 +1306,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=False,
+                rename_chapters=True,
             )
 
             plan = resolve_output_plan(book, output_dir, config=config)
@@ -1684,6 +1342,7 @@ class TestDownloadAccompanyingFiles:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             # Should NOT raise — failure is non-critical
@@ -1870,6 +1529,7 @@ class TestOutputStructure:
             config = Config(
                 username="u", password="p", format="m4b_mp3_fallback",
                 output_dir=str(tmpdir), download_extras=True, download_covers=True,
+                rename_chapters=True,
             )
 
             # Should NOT raise — failure is non-critical
@@ -1878,3 +1538,1228 @@ class TestOutputStructure:
 
             # Returns empty list (nothing downloaded)
             assert result == []
+
+
+
+class TestRenameChapters:
+    """Tests for rename_chapters() — post-process MP3 files with chapter titles."""
+
+    def test_basic_rename_renames_all_files_with_chapter_titles(self):
+        """Given 3 MP3 files and 3 tracks with titles, renames all to '{num} - {book} - {chapter}.mp3'."""
+        import os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create 3 MP3 files with numeric prefixes (simulating extracted ZIP contents)
+            for i in range(1, 4):
+                Path(tmpdir, f"{i}.mp3").write_text(f"audio{i}")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Prologue"},
+                {"number": 2, "chapter_title": "The Beginning"},
+                {"number": 3, "chapter_title": "Epilogue"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Test Book")
+
+            assert count == 3
+            assert Path(tmpdir, "1 - Test Book - Prologue.mp3").exists()
+            assert Path(tmpdir, "2 - Test Book - The Beginning.mp3").exists()
+            assert Path(tmpdir, "3 - Test Book - Epilogue.mp3").exists()
+            # Original files should be gone (renamed)
+            assert not Path(tmpdir, "1.mp3").exists()
+
+
+    def test_natural_sort_pairs_files_numerically_not_alphabetically(self):
+        """Files Track-1.mp3 through Track-10.mp3 are sorted numerically, so Track-10 pairs with track 10."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create files that would sort alphabetically wrong: 10 comes before 2
+            for i in [1, 2, 3, 10]:
+                Path(tmpdir, f"Track - {i}.mp3").write_text(f"audio{i}")
+
+            tracks = [
+                {"number": 1, "chapter_title": "First"},
+                {"number": 2, "chapter_title": "Second"},
+                {"number": 3, "chapter_title": "Third"},
+                {"number": 10, "chapter_title": "Tenth"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Sort Book")
+
+            assert count == 4
+            # Track - 1.mp3 should pair with track number 1 (First)
+            assert Path(tmpdir, "1 - Sort Book - First.mp3").exists()
+            # Track - 10.mp3 should pair with track number 10 (Tenth), NOT track 2
+            assert Path(tmpdir, "10 - Sort Book - Tenth.mp3").exists()
+
+    def test_null_chapter_title_falls_back_to_chapter_n(self):
+        """Tracks with None or blank chapter_title use 'Chapter {n}' fallback."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+            Path(tmpdir, "3.mp3").write_text("c")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Normal Title"},
+                {"number": 2, "chapter_title": None},
+                {"number": 3, "chapter_title": "   "},  # whitespace-only
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Fallback Book")
+
+            assert count == 3
+            assert Path(tmpdir, "1 - Fallback Book - Normal Title.mp3").exists()
+            assert Path(tmpdir, "2 - Fallback Book - Chapter 2.mp3").exists()
+            assert Path(tmpdir, "3 - Fallback Book - Chapter 3.mp3").exists()
+
+    def test_zero_padding_two_digits_for_twelve_tracks(self):
+        """12 tracks produce 2-digit zero-padded numbers (01, 02, ..., 12)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for i in range(1, 13):
+                Path(tmpdir, f"{i}.mp3").write_text(f"audio{i}")
+
+            tracks = [{"number": i, "chapter_title": f"Ch {i}"} for i in range(1, 13)]
+
+            count = rename_chapters(tmpdir, tracks, "Pad Book")
+
+            assert count == 12
+            assert Path(tmpdir, "01 - Pad Book - Ch 1.mp3").exists()
+            assert Path(tmpdir, "09 - Pad Book - Ch 9.mp3").exists()
+            assert Path(tmpdir, "10 - Pad Book - Ch 10.mp3").exists()
+            assert Path(tmpdir, "12 - Pad Book - Ch 12.mp3").exists()
+
+    def test_sanitizes_colons_slashes_and_special_chars_in_titles(self):
+        """Colons, slashes, and other illegal chars in chapter titles are cleaned via sanitize()."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Chapter 1: The Beginning / End"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Test: Book")
+
+            assert count == 1
+            # Colon becomes " -", slash is stripped by sanitize()
+            result_file = list(Path(tmpdir).glob("*.mp3"))[0]
+            assert "Chapter 1 - The Beginning  End" in result_file.name  # colon replaced, slash removed
+            # Also verify book title was sanitized
+            assert "Test - Book" in result_file.name  # colon in book title replaced
+
+
+    def test_non_mp3_files_are_ignored(self):
+        """Non-MP3 files in directory are left untouched; only .mp3 files renamed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("audio")
+            Path(tmpdir, "readme.txt").write_text("text")
+            Path(tmpdir, "cover.jpg").write_bytes(b"\xff\xd8\xff")
+
+            tracks = [{"number": 1, "chapter_title": "Only Chapter"}]
+
+            count = rename_chapters(tmpdir, tracks, "Filter Book")
+
+            assert count == 1
+            assert Path(tmpdir, "1 - Filter Book - Only Chapter.mp3").exists()
+            # Non-MP3 files untouched
+            assert Path(tmpdir, "readme.txt").exists()
+            assert Path(tmpdir, "cover.jpg").exists()
+
+
+    def test_count_mismatch_fewer_files_than_tracks_renames_available(self):
+        """When fewer MP3 files than tracks, renames only available pairs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Only 2 files but 4 tracks
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Ch 1"},
+                {"number": 2, "chapter_title": "Ch 2"},
+                {"number": 3, "chapter_title": "Ch 3"},
+                {"number": 4, "chapter_title": "Ch 4"},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "Mismatch Book")
+
+            # Should rename min(2, 4) = 2 files
+            assert count == 2
+            assert Path(tmpdir, "1 - Mismatch Book - Ch 1.mp3").exists()
+            assert Path(tmpdir, "2 - Mismatch Book - Ch 2.mp3").exists()
+
+
+    def test_empty_directory_returns_zero_no_error(self):
+        """Empty directory with no MP3 files is a no-op returning 0."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tracks = [{"number": 1, "chapter_title": "Ch 1"}]
+
+            count = rename_chapters(tmpdir, tracks, "Empty Book")
+
+            assert count == 0
+            assert list(Path(tmpdir).glob("*.mp3")) == []
+
+
+    def test_empty_tracks_list_returns_zero(self):
+        """Empty tracks list is a no-op even if MP3 files exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("audio")
+
+            count = rename_chapters(tmpdir, [], "No Tracks")
+
+            assert count == 0
+            # Original file should still exist (not renamed)
+
+
+    def test_idempotent_running_twice_does_not_double_rename_or_error(self):
+        """Running rename_chapters twice on same directory produces same result without errors."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+
+            tracks = [
+                {"number": 1, "chapter_title": "Alpha"},
+                {"number": 2, "chapter_title": "Beta"},
+            ]
+
+            # First run
+            count1 = rename_chapters(tmpdir, tracks, "Idem Book")
+            # Second run on already-renamed files
+            count2 = rename_chapters(tmpdir, tracks, "Idem Book")
+
+            assert count1 == 2
+            assert count2 == 2
+            # Files exist with correct final names
+            assert Path(tmpdir, "1 - Idem Book - Alpha.mp3").exists()
+            assert Path(tmpdir, "2 - Idem Book - Beta.mp3").exists()
+            # No extra files created
+            mp3_files = list(Path(tmpdir).glob("*.mp3"))
+            assert len(mp3_files) == 2
+
+
+    def test_all_null_titles_use_chapter_n_fallback_for_all(self):
+        """When ALL tracks have null/blank chapter_title, every file gets 'Chapter N'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "1.mp3").write_text("a")
+            Path(tmpdir, "2.mp3").write_text("b")
+            Path(tmpdir, "3.mp3").write_text("c")
+
+            tracks = [
+                {"number": 1, "chapter_title": None},
+                {"number": 2, "chapter_title": ""},
+                {"number": 3, "chapter_title": "  \t  "},
+            ]
+
+            count = rename_chapters(tmpdir, tracks, "No Titles Book")
+
+            assert count == 3
+            assert Path(tmpdir, "1 - No Titles Book - Chapter 1.mp3").exists()
+            assert Path(tmpdir, "2 - No Titles Book - Chapter 2.mp3").exists()
+            assert Path(tmpdir, "3 - No Titles Book - Chapter 3.mp3").exists()
+
+
+# ---------------------------------------------------------------------------
+# Issue #34: Wire rename_chapters() into download pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestRenameChaptersWiring:
+    """Integration tests: rename_chapters wired into download pipeline."""
+
+    def test_mp3_only_rename_chapters_true_renames_files(self):
+        """mp3_only + rename_chapters=True → MP3 files renamed after extraction."""
+        import io
+        import zipfile
+
+        # Create ZIP with 2 MP3 files
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-1")
+            zf.writestr("2.mp3", b"audio-2")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Prologue"},
+                            {"number": 2, "chapter_title": "The Start"},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Rename Test Book", authors=["Author"], narrators=["N"], isbn="9789900000001")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,  # ← THE KEY PARAMETER (doesn't exist yet — test will fail)
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            # Files should be renamed with chapter titles
+            output_dir = result.path
+            assert (output_dir / "1 - Rename Test Book - Prologue.mp3").exists()
+            assert (output_dir / "2 - Rename Test Book - The Start.mp3").exists()
+            # Original numeric names should be gone
+            assert not (output_dir / "1.mp3").exists()
+            assert not (output_dir / "2.mp3").exists()
+
+    def test_m4b_only_rename_chapters_not_called(self):
+        """m4b_only + rename_chapters=True → no rename (no MP3s)."""
+        m4b_content = b"fake-m4b-data"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [],
+                        "tracks": [{"number": 1, "chapter_title": "Ch1"}],
+                    },
+                )
+            if "/packaged_m4b" in request.url.path:
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/book.m4b"})
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=m4b_content)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="M4B Only Book", authors=["Author"], narrators=["N"], isbn="9789900000002")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,  # even with True, M4B should not trigger rename
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "m4b"
+            # No MP3 files should exist at all
+            mp3_files = list(result.path.glob("*.mp3"))
+            assert len(mp3_files) == 0
+
+    def test_m4b_mp3_fallback_m4b_success_no_rename_side_effects(self):
+        """m4b_mp3_fallback + M4B success + rename_chapters=True → no rename side effects."""
+        m4b_content = b"fake-m4b-data"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [],
+                        "tracks": [{"number": 1, "chapter_title": "Ch1"}],
+                    },
+                )
+            # M4B endpoint succeeds → no MP3 fallback
+            if "/packaged_m4b" in request.url.path:
+                return httpx.Response(200, json={"m4b_url": "https://cdn.example.com/book.m4b"})
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=m4b_content)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="M4B Success Fallback Book", authors=["Author"], narrators=["N"], isbn="9789900000007")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_mp3_fallback")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,  # even with True, M4B success should not trigger rename
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "m4b"
+            # No MP3 files should exist at all (M4B path taken, no fallback)
+            mp3_files = list(result.path.glob("*.mp3"))
+            assert len(mp3_files) == 0
+            # The .m4b file should exist (proving M4B download succeeded)
+            m4b_files = list(result.path.glob("*.m4b")) if result.path.is_dir() else []
+            if not m4b_files:
+                # result.path may be the .m4b file itself for m4b downloads
+                assert result.path.exists() and result.path.suffix == ".m4b"
+
+    def test_rename_chapters_false_skips_rename(self):
+        """mp3_only + rename_chapters=False (default) → files NOT renamed."""
+        import io
+        import zipfile
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-1")
+            zf.writestr("2.mp3", b"audio-2")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Prologue"},
+                            {"number": 2, "chapter_title": "The Start"},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="No Rename Book", authors=["Author"], narrators=["N"], isbn="9789900000004")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            # rename_chapters defaults to False
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=False,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            # Original numeric names should still exist (not renamed)
+            assert (output_dir / "1.mp3").exists()
+            assert (output_dir / "2.mp3").exists()
+            # Renamed versions should NOT exist
+            assert not (output_dir / "1 - No Rename Book - Prologue.mp3").exists()
+
+    def test_m4b_mp3_fallback_renames_on_fallback(self):
+        """m4b_mp3_fallback: M4B fails, MP3 fallback + rename_chapters=True → renamed."""
+        import io
+        import zipfile
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-1")
+            zf.writestr("2.mp3", b"audio-2")
+            zf.writestr("3.mp3", b"audio-3")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Opening"},
+                            {"number": 2, "chapter_title": "Middle"},
+                            {"number": 3, "chapter_title": "Closing"},
+                        ],
+                    },
+                )
+            # M4B endpoint returns error → triggers fallback
+            if request.url.path == "/api/v10/m4b":
+                return httpx.Response(404)
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Fallback Book", authors=["Author"], narrators=["N"], isbn="9789900000003")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_mp3_fallback")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            assert (output_dir / "1 - Fallback Book - Opening.mp3").exists()
+            assert (output_dir / "2 - Fallback Book - Middle.mp3").exists()
+            assert (output_dir / "3 - Fallback Book - Closing.mp3").exists()
+
+    def test_count_mismatch_produces_warning(self, caplog):
+        """MP3 file count != track count → warning logged (no crash)."""
+        import io
+        import zipfile
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-1")
+            zf.writestr("2.mp3", b"audio-2")
+            zf.writestr("3.mp3", b"audio-3")  # 3 files but only 2 tracks
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Ch1"},
+                            {"number": 2, "chapter_title": "Ch2"},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Mismatch Book", authors=["Author"], narrators=["N"], isbn="9789900000005")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            caplog.set_level("WARNING", logger="librofm_downloader.downloader")
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            messages = [r.message for r in caplog.records]
+            assert any("mismatch" in m.lower() for m in messages), \
+                f"Expected count-mismatch warning, got: {messages}"
+
+    def test_rename_logs_each_operation(self, caplog):
+        """rename_chapters=True → info log shows renamed file count."""
+        import io
+        import zipfile
+        import logging
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-1")
+            zf.writestr("2.mp3", b"audio-2")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Alpha"},
+                            {"number": 2, "chapter_title": "Beta"},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Log Test Book", authors=["Author"], narrators=["N"], isbn="9789900000006")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            with caplog.at_level(logging.INFO, logger="librofm_downloader.downloader"):
+                result = download_book(
+                    book=book,
+                    session=client,
+                    plan=plan,
+                    reporter=reporter,
+                    rename_chapters=True,
+                )
+
+            assert result.status == "downloaded"
+
+            # Should have an INFO log about renaming
+            info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+            assert any("renamed" in m.lower() for m in info_messages), \
+                f"Expected 'renamed' info message, got: {info_messages}"
+            assert any("log test book" in m.lower() for m in info_messages), \
+                f"Expected book title in log, got: {info_messages}"
+
+    def test_special_chars_in_chapter_titles_sanitized(self):
+        """Special characters in chapter titles are sanitized through full pipeline."""
+        import io
+        import zipfile
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-1")
+            zf.writestr("2.mp3", b"audio-2")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Introduction: The <Beginning>"},
+                            {"number": 2, "chapter_title": 'Chapter 1: "Hello / World"?'},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title='Test: A Book (2024)', authors=["Author"], narrators=["N"], isbn="9789900000007")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            # Original numeric names should be gone
+            assert not (output_dir / "1.mp3").exists()
+            assert not (output_dir / "2.mp3").exists()
+
+            # Renamed files should exist with sanitized names (no special chars)
+            mp3_files = sorted(output_dir.glob("*.mp3"))
+            assert len(mp3_files) >= 2
+            for f in mp3_files:
+                name = f.name
+                for char in '/:<>\\|?*':
+                    assert char not in name, (
+                        f"Special character '{char}' found in filename: {name}"
+                    )
+
+    def test_hundred_plus_chapters_three_digit_padding(self):
+        """100+ chapters → zero-padded to 3 digits (001, 002, … 099, 100, 101)."""
+        import io
+        import zipfile
+
+        num_tracks = 105
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            for i in range(1, num_tracks + 1):
+                zf.writestr(f"{i}.mp3", f"audio-{i}".encode())
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        track_titles = [f"Chapter {i}" for i in range(1, num_tracks + 1)]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": i, "chapter_title": title}
+                            for i, title in enumerate(track_titles, start=1)
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Big Book", authors=["Author"], narrators=["N"], isbn="9789900000007")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            # Original numeric names should all be gone
+            for i in range(1, num_tracks + 1):
+                assert not (output_dir / f"{i}.mp3").exists(), \
+                    f"Original name {i}.mp3 should be renamed"
+
+            # Three-digit zero-padded renamed files — spot-check boundaries
+            assert (output_dir / "001 - Big Book - Chapter 1.mp3").exists()
+            assert (output_dir / "005 - Big Book - Chapter 5.mp3").exists()
+            assert (output_dir / "099 - Big Book - Chapter 99.mp3").exists()
+            # The 99→100 transition is the critical boundary
+            assert (output_dir / "100 - Big Book - Chapter 100.mp3").exists()
+            assert (output_dir / "101 - Big Book - Chapter 101.mp3").exists()
+            assert (output_dir / "105 - Big Book - Chapter 105.mp3").exists()
+
+            # Exactly 105 MP3 files
+            mp3_files = list(output_dir.glob("*.mp3"))
+            assert len(mp3_files) == num_tracks
+    def test_single_track_zero_padding(self):
+        """Single-track book: zero-padding width=1, no leading zero."""
+        import io
+        import zipfile
+
+        mp3_zip_payload = io.BytesIO()
+        with zipfile.ZipFile(mp3_zip_payload, "w") as zf:
+            zf.writestr("1.mp3", b"audio-only")
+        mp3_zip_data = mp3_zip_payload.getvalue()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if request.url.path == "/api/v10/download-manifest":
+                return httpx.Response(
+                    200,
+                    json={
+                        "parts": [{"url": "https://cdn.example.com/p1.zip", "name": "p1"}],
+                        "tracks": [
+                            {"number": 1, "chapter_title": "Only Chapter"},
+                        ],
+                    },
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=mp3_zip_data)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
+
+        book = Book(title="Single Track Book", authors=["Author"], narrators=["N"], isbn="9789900000008")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            plan = resolve_output_plan(book, base_dir, format_strategy="mp3_only")
+            reporter = DownloadReporter()
+
+            result = download_book(
+                book=book,
+                session=client,
+                plan=plan,
+                reporter=reporter,
+                rename_chapters=True,
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+
+            output_dir = result.path
+            # Original numeric name gone
+            assert not (output_dir / "1.mp3").exists()
+            # Renamed with single-digit (width=1 for 1 track)
+            assert (output_dir / "1 - Single Track Book - Only Chapter.mp3").exists()
+            # Exactly 1 MP3 file
+            assert len(list(output_dir.glob("*.mp3"))) == 1
+
+
+class TestStreamToFile:
+    """_stream_to_file() helper — chunked streaming download with .partial → atomic rename."""
+
+    def test_fresh_download_streams_and_renames(self):
+        """Fresh download writes .partial, atomically renames to final_path, returns Path."""
+        payload = b"fake-stream-content-" * 10  # 200 bytes
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            result = _stream_to_file(
+                url="https://cdn.example.com/file.bin",
+                partial_path=partial_path,
+                final_path=final_path,
+                transport=transport,
+            )
+
+            # Final file exists with correct content
+            assert final_path.exists()
+            assert final_path.read_bytes() == payload
+            # .partial file was renamed away (atomic rename worked)
+            assert not partial_path.exists()
+            # Return value is the final path
+            assert result == final_path
+
+    def test_cancel_mid_stream_raises_interrupted(self):
+        """When cancel_event is set mid-stream, raises InterruptedDownload and leaves .partial.
+
+        Payload exceeds CHUNK_SIZE so iter_bytes actually loops multiple times,
+        giving the cancel check a chance to fire between chunks.
+        """
+        import time
+
+        from librofm_downloader.downloader import CHUNK_SIZE
+
+        cancel_event = threading.Event()
+        payload = b"X" * (CHUNK_SIZE + 1024)  # > 8 MB → 2+ chunk iterations
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=payload,
+                headers={"content-length": str(len(payload))},
+            )
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            # Set cancel from another thread after a brief delay
+            # (gives time for first chunk to start processing)
+            def set_cancel_soon():
+                time.sleep(0)  # yield to allow download to start
+                cancel_event.set()
+
+            t = threading.Thread(target=set_cancel_soon, daemon=True)
+            t.start()
+            try:
+                _stream_to_file(
+                    url="https://cdn.example.com/file.bin",
+                    partial_path=partial_path,
+                    final_path=final_path,
+                    transport=transport,
+                    cancel_event=cancel_event,
+                )
+                assert False, "Expected InterruptedDownload"
+            except InterruptedDownload:
+                pass
+
+            t.join(timeout=2)
+
+            # .partial file still exists — no atomic rename happened
+            assert partial_path.exists()
+            # Final path must NOT exist on cancellation
+            assert not final_path.exists()
+
+    def test_progress_callback_receives_bytes_with_content_length(self):
+        """Progress callback receives (downloaded, total=N) first call, then (downloaded) only."""
+        payload = b"x" * 256  # small but enough to get multiple chunks
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})
+
+        transport = httpx.MockTransport(handler)
+        progress_calls: list[dict] = []
+
+        def capture_progress(downloaded: int, **kwargs: object) -> None:
+            progress_calls.append({"downloaded": downloaded, "kwargs": kwargs})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            _stream_to_file(
+                url="https://cdn.example.com/file.bin",
+                partial_path=partial_path,
+                final_path=final_path,
+                transport=transport,
+                progress=capture_progress,
+            )
+
+        # Progress callback was called at least once
+        assert len(progress_calls) >= 1
+
+        # First call includes total=content_length as keyword arg
+        assert "total" in progress_calls[0]["kwargs"]
+        assert progress_calls[0]["kwargs"]["total"] == len(payload)
+
+        # Byte counts are monotonically increasing
+        downloaded_values = [c["downloaded"] for c in progress_calls]
+        assert downloaded_values == sorted(downloaded_values)
+        assert all(d > 0 for d in downloaded_values)
+
+    def test_resume_from_partial_file(self):
+        """Resume: appends to existing .partial file, sends Range header."""
+        first_half = b"first-half-"  # 11 bytes
+        second_half = b"second-half-"  # 12 bytes
+        full_payload = first_half + second_half
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Server should receive a Range header requesting bytes from offset 11
+            range_header = request.headers.get("range", "")
+            assert range_header == "bytes=11-", f"Expected Range: bytes=11-, got {range_header!r}"
+            return httpx.Response(
+                206,  # Partial Content
+                content=second_half,
+                headers={"content-length": str(len(second_half))},
+            )
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            # Pre-create partial file with first half of content
+            partial_path.write_bytes(first_half)
+
+            result = _stream_to_file(
+                url="https://cdn.example.com/file.bin",
+                partial_path=partial_path,
+                final_path=final_path,
+                transport=transport,
+            )
+
+            # Final file contains both halves concatenated
+            assert final_path.exists()
+            assert final_path.read_bytes() == full_payload
+            # .partial renamed away
+            assert not partial_path.exists()
+            assert result == final_path
+
+    def test_propagates_http_error(self):
+        """HTTP error (e.g. 404) raises httpx.HTTPStatusError, no final file created."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            final_path = Path(tmpdir) / "output.bin"
+            partial_path = final_path.with_suffix(final_path.suffix + ".partial")
+
+            with pytest.raises(httpx.HTTPStatusError):
+                _stream_to_file(
+                    url="https://cdn.example.com/missing.bin",
+                    partial_path=partial_path,
+                    final_path=final_path,
+                    transport=transport,
+                )
+
+            # No final file should exist after an HTTP error
+            assert not final_path.exists()
+
+
+class TestFinalizeDownload:
+    """_finalize_download() consolidates post-download rename/accompany/return logic."""
+
+    def test_m4b_path_returns_download_result_and_downloads_accompanying(self):
+        """M4B format: downloads accompanying files and returns downloaded DownloadResult."""
+        cover_payload = b"fake-cover-jpeg"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "tok", "token_type": "bearer", "expires_in": 7200},
+                )
+            if "cdn.example.com" in request.url.host:
+                return httpx.Response(200, content=cover_payload)
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        session = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        session.authenticate()
+
+        book = Book(
+            title="Test Book", authors=["Author"], narrators=["Narrator"],
+            isbn="9781111111111", cover_url="https://cdn.example.com/cover.jpg",
+        )
+
+        from librofm_downloader.config import Config
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "audiobooks"
+            config = Config(
+                username="u", password="p", format="m4b_only",
+                output_dir=str(base_dir), download_covers=True, download_extras=False,
+                rename_chapters=False,
+            )
+            plan = resolve_output_plan(book, base_dir, config=config, format_strategy="m4b_only")
+            result_path = plan.audio_path
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_bytes(b"fake-m4b")
+
+            reporter = DownloadReporter()
+
+            from librofm_downloader.downloader import _finalize_download
+
+            result = _finalize_download(
+                result_path=result_path,
+                format="m4b",
+                book=book,
+                plan=plan,
+                session=session,
+                transport=transport,
+                reporter=reporter,
+            )
+
+            assert result.status == "downloaded"
+            assert result.path == result_path
+            assert result.format == "m4b"
+            # Cover was downloaded to plan.cover_path
+            assert plan.cover_path is not None
+            assert plan.cover_path.exists()
+
+    def test_mp3_path_with_rename_chapters_renames_and_returns_result(self):
+        """MP3 format + rename_chapters=True: renames files then returns downloaded result."""
+        from unittest.mock import MagicMock
+        from librofm_downloader.config import Config
+
+        session = MagicMock(spec=LibroFmSession)
+        transport = MagicMock(spec=httpx.BaseTransport)
+
+        book = Book(title="My Book", authors=["A"], narrators=["N"], isbn="9780000000001")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "out"
+            config = Config(
+                username="u", password="p", format="mp3_only",
+                output_dir=str(base_dir), download_covers=False, download_extras=False,
+                rename_chapters=True,
+            )
+            plan = resolve_output_plan(book, base_dir, config=config, format_strategy="mp3_only")
+
+            # Create fake MP3 directory with track files
+            audio_dir = plan.audio_path.parent
+            audio_dir.mkdir(parents=True)
+            tracks = [
+                {"title": "Chapter 1", "file": "01.mp3", "number": 1},
+                {"title": "Chapter 2", "file": "02.mp3", "number": 2},
+            ]
+            for t in tracks:
+                (audio_dir / t["file"]).write_bytes(b"fake-mp3")
+
+            reporter = DownloadReporter()
+
+            from librofm_downloader.downloader import _finalize_download
+
+            result = _finalize_download(
+                result_path=audio_dir,  # MP3 returns dir path
+                format="mp3",
+                book=book,
+                plan=plan,
+                session=session,
+                transport=transport,
+                rename_chapters=True,
+                reporter=reporter,
+                mp3_tracks=tracks,
+            )
+
+            assert result.status == "downloaded"
+            assert result.path == audio_dir
+            assert result.format == "mp3"
+            # Files were renamed (01.mp3 → "1 - My Book - Chapter 1.mp3")
+            renamed_files = sorted(audio_dir.iterdir())
+            assert len(renamed_files) == 2
+            assert any("Chapter 1" in f.name for f in renamed_files)
+            assert any("Chapter 2" in f.name for f in renamed_files)
+
+    def test_mp3_path_without_rename_chapters_skips_rename(self):
+        """MP3 format + rename_chapters=False: does NOT rename files."""
+        from unittest.mock import MagicMock
+        from librofm_downloader.config import Config
+
+        session = MagicMock(spec=LibroFmSession)
+        transport = MagicMock(spec=httpx.BaseTransport)
+
+        book = Book(title="My Book", authors=["A"], narrators=["N"], isbn="9780000000001")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "out"
+            config = Config(
+                username="u", password="p", format="mp3_only",
+                output_dir=str(base_dir), download_covers=False, download_extras=False,
+                rename_chapters=False,
+            )
+            plan = resolve_output_plan(book, base_dir, config=config, format_strategy="mp3_only")
+
+            audio_dir = plan.audio_path.parent
+            audio_dir.mkdir(parents=True)
+            # Original filenames should remain unchanged
+            (audio_dir / "01.mp3").write_bytes(b"fake")
+            (audio_dir / "02.mp3").write_bytes(b"fake")
+
+            reporter = DownloadReporter()
+
+            from librofm_downloader.downloader import _finalize_download
+
+            result = _finalize_download(
+                result_path=audio_dir,
+                format="mp3",
+                book=book,
+                plan=plan,
+                session=session,
+                transport=transport,
+                rename_chapters=False,
+                reporter=reporter,
+                mp3_tracks=[],
+            )
+
+            assert result.status == "downloaded"
+            assert result.format == "mp3"
+            # Files NOT renamed — original names preserved
+            remaining = sorted(audio_dir.iterdir())
+            assert len(remaining) == 2
+            assert "01.mp3" in [f.name for f in remaining]
+            assert "02.mp3" in [f.name for f in remaining]
+
+    def test_no_accompanying_files_skips_download_call(self):
+        """When cover_path and pdf_path are both None, download_accompanying_files is NOT called."""
+        from unittest.mock import MagicMock, patch
+
+        session = MagicMock(spec=LibroFmSession)
+        transport = MagicMock(spec=httpx.BaseTransport)
+
+        book = Book(title="Solo", authors=["A"], narrators=["N"], isbn="9780000000002")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir) / "out"
+            # No config → cover_path and pdf_path are both None
+            plan = resolve_output_plan(book, base_dir, format_strategy="m4b_only")
+            assert plan.cover_path is None
+            assert plan.pdf_path is None
+
+            result_path = plan.audio_path
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(b"fake-m4b")
+
+            with patch("librofm_downloader.downloader.download_accompanying_files") as mock_accompany:
+                from librofm_downloader.downloader import _finalize_download
+
+                result = _finalize_download(
+                    result_path=result_path,
+                    format="m4b",
+                    book=book,
+                    plan=plan,
+                    session=session,
+                    transport=transport,
+                )
+
+                assert result.status == "downloaded"
+                assert result.format == "m4b"
+                mock_accompany.assert_not_called()

@@ -173,6 +173,13 @@ class TestDefaults:
         )
         assert config.download_covers is True
 
+    def test_default_rename_chapters_is_true(self):
+        config = load_config(
+            config_path=FIXTURES / "config_minimal.yaml",
+            secrets_path=FIXTURES / "secrets_only_creds.yaml",
+        )
+        assert config.rename_chapters is True
+
 
 class TestWorkersDefault:
     """workers field defaults to 3 when not specified in YAML."""
@@ -272,6 +279,13 @@ class TestEdgeCases:
             secrets_path=FIXTURES / "secrets_only_creds.yaml",
         )
         assert config.download_covers is False
+
+    def test_explicit_false_for_rename_chapters(self):
+        config = load_config(
+            config_path=FIXTURES / "config_with_overrides.yaml",
+            secrets_path=FIXTURES / "secrets_only_creds.yaml",
+        )
+        assert config.rename_chapters is False
 
     def test_all_three_valid_formats_accepted(self):
         for fmt in ("m4b_mp3_fallback", "mp3_only", "m4b_only"):

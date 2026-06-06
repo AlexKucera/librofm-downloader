@@ -6,6 +6,7 @@ object lives in ``book.py``.
 """
 
 import logging
+import re
 import threading
 from pathlib import Path
 
@@ -13,7 +14,6 @@ import httpx
 
 from librofm_downloader.book import Book
 from librofm_downloader.session import M4BUnavailableError
-from librofm_downloader.history import HistoryEntry
 from librofm_downloader.path import (
     _resolve_output_dir,
     needs_subdirectory,
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,67 @@ import zipfile as _zipfile
 # Constants for downloads
 
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
+
+
+def _stream_to_file(
+    url: str,
+    partial_path: Path,
+    final_path: Path,
+    transport: httpx.BaseTransport | None = None,
+    progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
+    headers: dict[str, str] | None = None,
+) -> Path:
+    """Stream a URL to file via chunked download with .partial → atomic rename.
+
+    Handles resume (appends if *partial_path* exists), cooperative
+    cancellation via *cancel_event*, and progress callbacks.
+
+    Returns the *final_path* on success.  Raises ``InterruptedDownload``
+    if *cancel_event* is set mid-stream, or ``httpx.HTTPStatusError`` on HTTP errors.
+    """
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Resume support: detect existing partial file
+    resume_from = 0
+    if partial_path.exists():
+        resume_from = partial_path.stat().st_size
+        logger.info("Resuming download from byte %d", resume_from)
+
+    effective_headers = dict(headers) if headers else {}
+    if resume_from > 0:
+        effective_headers["Range"] = f"bytes={resume_from}-"
+
+    client = httpx.Client(transport=transport, follow_redirects=True)
+    mode = "ab" if resume_from > 0 else "wb"
+
+    with client.stream("GET", url, headers=effective_headers or None) as resp:
+        resp.raise_for_status()
+        with open(partial_path, mode) as f:
+            downloaded = resume_from
+            content_length: int | None = None
+            for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedDownload("Download cancelled by user")
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress:
+                    if content_length is None:
+                        cl_header = resp.headers.get("content-length")
+                        if cl_header:
+                            # Content-Length from a Range response
+                            # covers only remaining bytes; add
+                            # resume_from for true total.
+                            content_length = int(cl_header) + resume_from
+                        progress(downloaded, total=content_length)
+                    else:
+                        progress(downloaded)
+
+    # Atomic rename from .partial to final filename
+    partial_path.rename(final_path)
+
+    logger.info("Downloaded %s → %s", url, final_path)
+    return final_path
 
 
 def _part_filename_from_url(url: str) -> str:
@@ -101,59 +162,27 @@ def download_zip_part(
     zip_path = output_dir / f"{part_name}.zip"
     partial_path = output_dir / f"{part_name}.zip.partial"
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _stream_to_file(
+        url=url,
+        partial_path=partial_path,
+        final_path=zip_path,
+        transport=transport,
+        progress=progress,
+        cancel_event=cancel_event,
+    )
 
-    # Resume support
-    resume_from = 0
-    if partial_path.exists():
-        resume_from = partial_path.stat().st_size
-        logger.info("Resuming ZIP part from byte %d", resume_from)
+    # Extract all files from ZIP into output_dir
+    extracted: list[Path] = []
+    with _zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(output_dir)
+                for name in zf.namelist():
+                    extracted.append(output_dir / name)
 
-    headers: dict[str, str] = {}
-    if resume_from > 0:
-        headers["Range"] = f"bytes={resume_from}-"
+    # Clean up ZIP file after extraction
+    zip_path.unlink(missing_ok=True)
 
-    client = httpx.Client(transport=transport, follow_redirects=True)
-    mode = "ab" if resume_from > 0 else "wb"
-
-    try:
-        with client.stream("GET", url, headers=headers) as resp:
-            resp.raise_for_status()
-            with open(partial_path, mode) as f:
-                downloaded = resume_from
-                content_length: int | None = None
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise InterruptedDownload("Download cancelled by user")
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        if content_length is None:
-                            cl_header = resp.headers.get("content-length")
-                            if cl_header:
-                                content_length = int(cl_header)
-                            progress(downloaded, total=content_length)
-                        else:
-                            progress(downloaded)
-
-        # Atomic rename from .partial to .zip
-        partial_path.rename(zip_path)
-
-        # Extract all files from ZIP into output_dir
-        extracted: list[Path] = []
-        with _zipfile.ZipFile(zip_path, "r") as zf:
-                    zf.extractall(output_dir)
-                    for name in zf.namelist():
-                        extracted.append(output_dir / name)
-
-        # Clean up ZIP file after extraction
-        zip_path.unlink(missing_ok=True)
-
-        logger.info("Downloaded & extracted %s → %d file(s) in %s", url, len(extracted), output_dir)
-        return extracted
-    except InterruptedDownload:
-        # Skip post-processing on cancellation — partial file stays as .partial
-        raise
+    logger.info("Downloaded & extracted %s → %d file(s) in %s", url, len(extracted), output_dir)
+    return extracted
 
 
 # ---------------------------------------------------------------------------
@@ -184,51 +213,14 @@ def download_m4b(
     output_path = Path(output_path)
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
-    # Ensure parent directory exists
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Resume support: detect existing partial file
-    resume_from = 0
-    if partial_path.exists():
-        resume_from = partial_path.stat().st_size
-        logger.info("Resuming download from byte %d", resume_from)
-
-    headers: dict[str, str] = {}
-    if resume_from > 0:
-        headers["Range"] = f"bytes={resume_from}-"
-
-    client = httpx.Client(transport=transport, follow_redirects=True)
-
-    mode = "ab" if resume_from > 0 else "wb"
-
-    try:
-        with client.stream("GET", url, headers=headers) as resp:
-            resp.raise_for_status()
-
-            with open(partial_path, mode) as f:
-                downloaded = resume_from
-                content_length: int | None = None
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise InterruptedDownload("Download cancelled by user")
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        if content_length is None:
-                            cl_header = resp.headers.get("content-length")
-                            if cl_header:
-                                content_length = int(cl_header)
-                            progress(downloaded, total=content_length)
-                        else:
-                            progress(downloaded)
-
-        # Atomic rename from .partial to final filename
-        partial_path.rename(output_path)
-
-        logger.info("Downloaded %s → %s", url, output_path)
-        return output_path
-    except InterruptedDownload:
-        raise
+    return _stream_to_file(
+        url=url,
+        partial_path=partial_path,
+        final_path=output_path,
+        transport=transport,
+        progress=progress,
+        cancel_event=cancel_event,
+    )
 
 
 def download_book(
@@ -238,6 +230,8 @@ def download_book(
     reporter: "DownloadReporter",
     *,
     progress: "Callable[[int], None] | None" = None,
+    cancel_event: threading.Event | None = None,
+    rename_chapters: bool = False,
 ) -> DownloadResult:
     """Orchestrate a single book download with format strategy.
 
@@ -258,8 +252,8 @@ def download_book(
     # Use provided bound callback (from start_download) or fall back to reporter.update
     if progress is None:
         progress = reporter.update
-    cancel_event = reporter.cancel_event
-    transport = session._client._transport
+    # Cooperative cancellation: explicit parameter (Issue #39 — no longer via reporter)
+    transport = session.transport
 
     # --- m4b_mp3_fallback: try M4B first, fall back to MP3 ---
     if format_strategy == "m4b_mp3_fallback":
@@ -267,27 +261,33 @@ def download_book(
         try:
             m4b_url = session.fetch_m4b_url(book.isbn)
             result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            if plan.cover_path is not None or plan.pdf_path is not None:
-                download_accompanying_files(book, plan, client=session, transport=transport)
-            return DownloadResult(status="downloaded", path=result_path, format="m4b")
+            return _finalize_download(
+                result_path=result_path, format="m4b",
+                book=book, plan=plan, session=session, transport=transport,
+                reporter=reporter,
+            )
         except M4BUnavailableError:
             logger.info("M4B not available for %s (%s), falling back to MP3", book.title, book.isbn)
 
         # Fall back to MP3
-        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
-        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
-            download_accompanying_files(book, plan, client=session, transport=transport)
+        result_path, mp3_tracks = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         if result_path:
-            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+            return _finalize_download(
+                result_path=result_path, format="mp3",
+                book=book, plan=plan, session=session, transport=transport,
+                rename_chapters=rename_chapters, reporter=reporter, mp3_tracks=mp3_tracks,
+            )
         return DownloadResult(status="skipped")
 
     # --- mp3_only: skip M4B entirely ---
     if format_strategy == "mp3_only":
-        result_path = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
-        if result_path and (plan.cover_path is not None or plan.pdf_path is not None):
-            download_accompanying_files(book, plan, client=session, transport=transport)
+        result_path, mp3_tracks = _download_mp3(book, session, output_dir, transport=transport, progress=progress, cancel_event=cancel_event)
         if result_path:
-            return DownloadResult(status="downloaded", path=result_path, format="mp3")
+            return _finalize_download(
+                result_path=result_path, format="mp3",
+                book=book, plan=plan, session=session, transport=transport,
+                rename_chapters=rename_chapters, reporter=reporter, mp3_tracks=mp3_tracks,
+            )
         return DownloadResult(status="skipped")
 
     # --- m4b_only: skip book if M4B unavailable ---
@@ -295,14 +295,67 @@ def download_book(
         try:
             m4b_url = session.fetch_m4b_url(book.isbn)
             result_path = download_m4b(m4b_url, plan.audio_path, transport=transport, progress=progress, cancel_event=cancel_event)
-            if plan.cover_path is not None or plan.pdf_path is not None:
-                download_accompanying_files(book, plan, client=session, transport=transport)
-            return DownloadResult(status="downloaded", path=result_path, format="m4b")
+            return _finalize_download(
+                result_path=result_path, format="m4b",
+                book=book, plan=plan, session=session, transport=transport,
+                reporter=reporter,
+            )
         except M4BUnavailableError:
             logger.info("Skipping %s (%s): no M4B available (m4b_only mode)", book.title, book.isbn)
             return DownloadResult(status="skipped")
 
     raise ValueError(f"Unknown format strategy: {format_strategy}")
+
+
+def _finalize_download(
+    result_path: Path,
+    format: str,
+    book: "Book",
+    plan: "OutputPlan",
+    session: "LibroFmSession",
+    transport: httpx.BaseTransport | None = None,
+    *,
+    rename_chapters: bool = False,
+    reporter: "DownloadReporter | None" = None,
+    mp3_tracks: list[dict] | None = None,
+) -> DownloadResult:
+    """Post-download finalization: rename chapters, accompany files, return success.
+
+    Consolidates the repeated success-path logic from all three format-strategy
+    branches in download_book().  Callers only need to attempt their download;
+    on success they delegate here for everything else.
+    """
+    # Note: 'rename_chapters' param shadows the module-level rename_chapters()
+    # function. The actual function is called via _rename_and_log(), which has
+    # its own clean scope, so this is safe.
+    # MP3-only: optionally rename chapter files
+    if format == "mp3" and rename_chapters:
+        _rename_and_log(result_path, mp3_tracks or [], book.title, reporter)
+
+    # Download accompanying files (cover art, PDF extras)
+    if plan.cover_path is not None or plan.pdf_path is not None:
+        download_accompanying_files(book, plan, client=session, transport=transport)
+
+    return DownloadResult(status="downloaded", path=result_path, format=format)
+
+
+def _rename_and_log(output_dir: Path, tracks: list[dict], book_title: str, reporter=None) -> None:
+    """Call rename_chapters() and log each rename operation."""
+    mp3_files = list(output_dir.glob("*.mp3"))
+    if len(mp3_files) != len(tracks) and tracks:
+        logger.warning(
+            "Chapter rename: %d MP3 file(s) vs %d track(s) — count mismatch for '%s'",
+            len(mp3_files), len(tracks), book_title,
+        )
+
+    count = rename_chapters(output_dir, tracks, book_title)
+    if count > 0:
+        logger.info("Renamed %d chapter file(s) for '%s'", count, book_title)
+        # Show user-visible feedback with an example filename
+        if reporter is not None:
+            renamed_examples = sorted(output_dir.glob("*.mp3"))
+            example = renamed_examples[0].name if renamed_examples else "(unknown)"
+            reporter.chapter_renamed(count, book_title, example)
 
 
 def _download_mp3(
@@ -312,18 +365,24 @@ def _download_mp3(
     transport: httpx.BaseTransport | None = None,
     progress: "Callable[[int], None] | None" = None,
     cancel_event: threading.Event | None = None,
-) -> Path | None:
-    """Fetch MP3 manifest and download all ZIP parts."""
+) -> tuple[Path | None, list[dict]]:
+    """Fetch MP3 manifest and download all ZIP parts.
+
+    Returns:
+        Tuple of (output_dir on success / None on failure, tracks list from manifest).
+    """
+    tracks: list[dict] = []
     try:
         manifest = client.fetch_download_manifest(book.isbn)
     except M4BUnavailableError:
         logger.warning("MP3 manifest not available for %s (%s), skipping", book.title, book.isbn)
-        return None
+        return None, tracks
 
     parts = manifest.get("parts", [])
+    tracks = manifest.get("tracks", [])
     if not parts:
         logger.warning("Empty parts list in manifest for %s (%s), skipping", book.title, book.isbn)
-        return None
+        return None, tracks
 
     all_extracted: list[Path] = []
     for part in parts:
@@ -333,9 +392,9 @@ def _download_mp3(
 
     # Return output directory as representative path
     if all_extracted:
-        return output_dir
+        return output_dir, tracks
 
-    return None
+    return None, tracks
 
 
 # ---------------------------------------------------------------------------
@@ -380,20 +439,13 @@ def _download_cover(
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        client = httpx.Client(
+        _stream_to_file(
+            url=url,
+            partial_path=partial_path,
+            final_path=output_path,
             transport=transport,
-            follow_redirects=True,
             headers=LibroFmSession.DEFAULT_HEADERS,
         )
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(partial_path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    f.write(chunk)
-
-        partial_path.rename(output_path)
         logger.info("Downloaded cover → %s", output_path)
         return output_path
     except Exception as exc:
@@ -422,16 +474,12 @@ def _download_pdf(
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        client = httpx.Client(transport=transport, follow_redirects=True)
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(partial_path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    f.write(chunk)
-
-        partial_path.rename(output_path)
+        _stream_to_file(
+            url=url,
+            partial_path=partial_path,
+            final_path=output_path,
+            transport=transport,
+        )
         logger.info("Downloaded PDF extra → %s", output_path)
         return output_path
     except Exception as exc:
@@ -485,20 +533,41 @@ def download_accompanying_files(
     return downloaded
 
 
-def _write_history(
-    history: "DownloadHistory",
-    book: Book,
-    fmt: str,
-    path: str,
-) -> None:
-    """Write a download history entry."""
-    from datetime import datetime, timezone
 
-    entry = HistoryEntry(
-        isbn=book.isbn,
-        title=book.title,
-        format=fmt,
-        path=path,
-        downloaded_at=datetime.now(timezone.utc).isoformat(),
-    )
-    history.write(entry)
+def rename_chapters(
+    output_dir: Path | str,
+    tracks: list[dict],
+    book_title: str,
+) -> int:
+    """Rename extracted MP3 files to include chapter titles from the manifest.
+
+    Given a directory of .mp3 files and a tracks list, renames each file to
+    ``{zero-padded-number} - {sanitized_book_title} - {sanitized_chapter_title}.mp3``.
+    Returns count of files actually renamed.
+    """
+    output_dir = Path(output_dir)
+    mp3_files = sorted(output_dir.glob("*.mp3"))
+
+    # Natural sort by leading numeric prefix in filename stem
+    def _extract_number(p: Path) -> int:
+        m = re.match(r"(\d+)", p.stem)
+        return int(m.group(1)) if m else 0
+
+    mp3_files.sort(key=_extract_number)
+
+    # Zero-padding width from track count
+    width = len(str(len(tracks))) if tracks else 1
+    sanitized_book = sanitize(book_title)
+
+    renamed = 0
+    for mp3_file, track in zip(mp3_files, tracks):
+        num = track["number"]
+        raw_title = track.get("chapter_title", "") or ""
+        sanitized_chapter = sanitize(raw_title) or f"Chapter {num}"
+
+        new_name = f"{num:0{width}d} - {sanitized_book} - {sanitized_chapter}.mp3"
+        new_path = output_dir / new_name
+        mp3_file.rename(new_path)
+        renamed += 1
+
+    return renamed
