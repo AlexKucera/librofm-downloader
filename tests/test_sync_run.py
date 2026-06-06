@@ -2156,3 +2156,46 @@ class TestMakeDownloadFnExplicitParams:
             assert call_args[0][3] is fake_reporter  # reporter (injected)
             # rename_chapters=True was passed through closure
             assert call_args.kwargs["rename_chapters"] is True
+
+
+class TestSyncRunResultComposition:
+    """SyncRunResult wraps OrchestratorResult — composition, not duplication."""
+
+    def test_delegates_to_wrapped_orchestrator_result(self):
+        """All download-count fields read from wrapped OrchestratorResult."""
+        from librofm_downloader.book import Book
+        from librofm_downloader.orchestrator import OrchestratorResult
+        from librofm_downloader.sync_run import SyncRunResult
+
+        book = Book(title="Test", authors=["Author"], narrators=["Narrator"], isbn="123")
+        orch = OrchestratorResult(
+            downloaded_count=2,
+            skipped_count=1,
+            failed_count=3,
+            failed_books=[(book, "error")],
+            skipped_books=[book],
+            interrupted=True,
+        )
+        result = SyncRunResult(orchestrator_result=orch, fatal_error="boom")
+
+        assert result.downloaded_count == 2
+        assert result.skipped_count == 1
+        assert result.failed_count == 3
+        assert result.failed_books == [(book, "error")]
+        assert result.skipped_books == [book]
+        assert result.interrupted is True
+        assert result.fatal_error == "boom"
+
+    def test_default_wraps_empty_orchestrator_result(self):
+        """SyncRunResult with only fatal_error defaults to empty OrchestratorResult."""
+        from librofm_downloader.sync_run import SyncRunResult
+
+        result = SyncRunResult(fatal_error="Config error: bad yaml")
+
+        assert result.downloaded_count == 0
+        assert result.skipped_count == 0
+        assert result.failed_count == 0
+        assert result.failed_books == []
+        assert result.skipped_books == []
+        assert result.interrupted is False
+        assert result.fatal_error == "Config error: bad yaml"

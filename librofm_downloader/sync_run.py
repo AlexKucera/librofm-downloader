@@ -66,24 +66,39 @@ def _resolve_history_path(history_path: str | None) -> str:
 class SyncRunResult:
     """Structured result from a full sync run.
 
-    Attributes:
-        downloaded_count: Books successfully downloaded.
-        skipped_count: Books skipped (download_fn returned None).
-        failed_count: Books that raised an exception.
-        failed_books: List of (book, reason_string) tuples in original order.
-        skipped_books: List of Book objects that were skipped, in original order.
-        interrupted: True if the run was cancelled by Ctrl+C.
-        fatal_error: Non-None if the run stopped before downloads (auth, config, fetch).
+    Wraps an OrchestratorResult (single source of truth for download counts)
+    and adds fatal_error for pipeline-level failures (config, auth, fetch).
+
+    Delegating properties preserve the public interface — callers read
+    .downloaded_count etc. just like before.
     """
 
-    downloaded_count: int = 0
-    skipped_count: int = 0
-    failed_count: int = 0
-    failed_books: list[tuple[Book, str]] = field(default_factory=list)
-    skipped_books: list[Book] = field(default_factory=list)
-    interrupted: bool = False
+    orchestrator_result: OrchestratorResult = field(default_factory=OrchestratorResult)
     fatal_error: str | None = None
 
+    @property
+    def downloaded_count(self) -> int:
+        return self.orchestrator_result.downloaded_count
+
+    @property
+    def skipped_count(self) -> int:
+        return self.orchestrator_result.skipped_count
+
+    @property
+    def failed_count(self) -> int:
+        return self.orchestrator_result.failed_count
+
+    @property
+    def failed_books(self) -> list[tuple[Book, str]]:
+        return self.orchestrator_result.failed_books
+
+    @property
+    def skipped_books(self) -> list[Book]:
+        return self.orchestrator_result.skipped_books
+
+    @property
+    def interrupted(self) -> bool:
+        return self.orchestrator_result.interrupted
 
 def sync_run(
     config_path: str | None = None,
@@ -249,42 +264,22 @@ def sync_run(
             cancel_event=cancel_event,
         )
 
-        downloaded = result.downloaded_count
-        skipped = result.skipped_count
-        failed = result.failed_count
-        failed_books = result.failed_books
-        skipped_books = result.skipped_books
-
         reporter.summary(
-            downloaded=downloaded,
-            skipped=skipped,
-            failed=failed,
-            failed_books=failed_books,
-            skipped_books=skipped_books,
+            downloaded=result.downloaded_count,
+            skipped=result.skipped_count,
+            failed=result.failed_count,
+            failed_books=result.failed_books,
+            skipped_books=result.skipped_books,
         )
 
         if result.interrupted:
-            return SyncRunResult(
-                downloaded_count=downloaded,
-                skipped_count=skipped,
-                failed_count=failed,
-                failed_books=failed_books,
-                skipped_books=skipped_books,
-                interrupted=True,
-            )
+            return SyncRunResult(orchestrator_result=result)
 
         if verbose:
             console.print("[dim]── done ────────────────────────────────────────[/dim]")
 
-        return SyncRunResult(
-            downloaded_count=downloaded,
-            skipped_count=skipped,
-            failed_count=failed,
-            failed_books=failed_books,
-            skipped_books=skipped_books,
-            interrupted=False,
-        )
+        return SyncRunResult(orchestrator_result=result)
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Download interrupted by user (Ctrl+C).[/yellow]")
-        return SyncRunResult(interrupted=True)
+        return SyncRunResult(orchestrator_result=OrchestratorResult(interrupted=True))

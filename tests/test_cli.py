@@ -14,7 +14,8 @@ class TestCLIExitCodeTranslation:
         """Successful sync (no errors, no interrupt) → exit 0."""
         with patch("librofm_downloader.cli.sync_run") as mock_sr:
             from librofm_downloader.sync_run import SyncRunResult
-            mock_sr.return_value = SyncRunResult(downloaded_count=2)
+            from librofm_downloader.orchestrator import OrchestratorResult
+            mock_sr.return_value = SyncRunResult(orchestrator_result=OrchestratorResult(downloaded_count=2))
             assert run() == 0
 
     def test_fatal_error_returns_one(self):
@@ -28,21 +29,24 @@ class TestCLIExitCodeTranslation:
         """Ctrl+C interrupt → exit 130."""
         with patch("librofm_downloader.cli.sync_run") as mock_sr:
             from librofm_downloader.sync_run import SyncRunResult
-            mock_sr.return_value = SyncRunResult(interrupted=True)
+            from librofm_downloader.orchestrator import OrchestratorResult
+            mock_sr.return_value = SyncRunResult(orchestrator_result=OrchestratorResult(interrupted=True))
             assert run() == 130
 
     def test_all_books_fail_still_returns_zero(self):
         """All downloads failed but no fatal error → exit 0 (not an error exit)."""
         with patch("librofm_downloader.cli.sync_run") as mock_sr:
             from librofm_downloader.sync_run import SyncRunResult
-            mock_sr.return_value = SyncRunResult(failed_count=3)
+            from librofm_downloader.orchestrator import OrchestratorResult
+            mock_sr.return_value = SyncRunResult(orchestrator_result=OrchestratorResult(failed_count=3))
             assert run() == 0
 
     def test_interrupted_takes_priority_over_fatal_error(self):
         """If both interrupted and fatal_error, interrupted wins (exit 130)."""
         with patch("librofm_downloader.cli.sync_run") as mock_sr:
             from librofm_downloader.sync_run import SyncRunResult
-            mock_sr.return_value = SyncRunResult(interrupted=True, fatal_error="something")
+            from librofm_downloader.orchestrator import OrchestratorResult
+            mock_sr.return_value = SyncRunResult(orchestrator_result=OrchestratorResult(interrupted=True), fatal_error="something")
             assert run() == 130
 
 
