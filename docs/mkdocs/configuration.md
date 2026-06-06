@@ -72,6 +72,7 @@ All non-credential settings. Safe to commit. **Optional** — if missing, built-
 | `output_dir` | `string` | `"./audiobooks"` | Base directory for downloaded files. Relative paths resolve from CWD. |
 | `download_extras` | `boolean` | `true` | Download PDF extras (e.g., maps) when available. |
 | `download_covers` | `boolean` | `true` | Download cover art (JPEG/PNG) when available. |
+| `rename_chapters` | `boolean` | `true` | Rename extracted MP3 files with chapter titles from the manifest. Only applies to MP3 pipeline (`m4b_mp3_fallback` fallback or `mp3_only`). |
 | `workers` | `integer` | `3` | Number of parallel download threads. Set to 1 for sequential mode. Must be ≥ 1. |
 
 ### Full example
