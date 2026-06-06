@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- **selector:** Add interactive book selection module with
+  `select_books(books) -> list[Book]`. Questionary checkbox prompt
+  (all unchecked by default), confirmation summary with y/N prompt,
+  original-input-order preservation, Ctrl+C propagation via
+  `unsafe_ask()`. Row format: `N. Title — Author [Series #N]`.
+  9 tests. Closes #47.
+
 ### Fixed
 
 - **downloader:** Fix progress bar exceeding 100% on resumed downloads.
