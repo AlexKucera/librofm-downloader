@@ -56,15 +56,19 @@ librofm:
 
 ### "[Errno 2] No such file or directory: 'config.yaml'"
 
-**Cause:** The config file doesn't exist at the specified path (default: current directory).
+**Cause:** The config file doesn't exist at the specified path.
 
 **Fix:**
 
 ```bash
-# Run from the directory that contains config.yaml
+# Option 1: Place files in the XDG directory (recommended)
+mkdir -p ~/.config/librofm-downloader
+cp config.yaml secrets.yaml ~/.config/librofm-downloader/
+
+# Option 2: Run from the directory that contains config.yaml
 cd /path/to/your/project
 
-# Or specify the path explicitly
+# Option 3: Specify paths explicitly
 librofm-downloader --config /path/to/config.yaml --secrets /path/to/secrets.yaml
 ```
 
@@ -119,6 +123,31 @@ $ librofm-downloader
 - Switch to `m4b_mp3_fallback` to get the MP3 version instead
 - Accept that some books aren't available in M4B format
 
+## Selection issues
+
+### "--select requires an interactive terminal"
+
+**Cause:** You ran `librofm-downloader --select` in a non-interactive environment (cron, piped, SSH without TTY allocation).
+
+**Behavior:**
+- Tool exits immediately with exit code **1**
+- No downloads are attempted
+
+**Fix options:**
+- Run in an interactive terminal (local shell, `ssh -t` for TTY allocation)
+- Use `--limit N` instead for non-interactive capped downloads
+
+```bash
+# Non-interactive alternative: just download the first 5 new books
+librofm-downloader --limit 5
+```
+
+### --limit seems ignored when using --select
+
+**Behavior:** When `--select` is active, `--limit` is superseded — you pick exactly which books to download from the checkbox prompt. A notice is printed confirming this.
+
+**Fix:** This is intentional. Use `--select` to choose books, or use `--limit` alone for automatic capping.
+
 ## History file problems
 
 ### "Corrupt history file download_history.json: ... Starting with empty history."
@@ -133,10 +162,14 @@ $ librofm-downloader
 
 ```bash
 # Option 1: Delete and let it rebuild
+rm ~/.config/librofm-downloader/download_history.json
+librofm-downloader
+
+# Option 2: If using CWD-based history
 rm download_history.json
 librofm-downloader
 
-# Option 2: Fix the JSON manually (if you know what's in there)
+# Option 3: Fix the JSON manually (if you know what's in there)
 # Check for trailing commas, missing braces, etc.
 ```
 
@@ -147,7 +180,10 @@ librofm-downloader
 **Check:**
 
 ```bash
-# See what's recorded
+# See what's recorded (XDG location)
+cat ~/.config/librofm-downloader/download_history.json | python -m json.tool
+
+# Or if using CWD-based history
 cat download_history.json | python -m json.tool
 
 # Look for the ISBN of the book that's re-downloading
@@ -202,7 +238,7 @@ chmod u+w ./audiobooks/
 2. Whether a VPN/proxy is adding latency
 3. Libro.fm CDN responsiveness (varies by region)
 
-The tool downloads in a **single stream per book** (no parallelism within one book), but processes books sequentially. There is no built-in rate limiting or parallel download feature.
+The tool downloads in a **single stream per book** (no parallelism within one book), but can process **multiple books in parallel** via `--workers N` (default 3). Libro.fm API calls are rate-limited to 3 concurrent requests regardless of worker count.
 
 ### Large library takes a long time
 
@@ -212,6 +248,18 @@ Use `--limit` to process smaller batches:
 
 ```bash
 # Download 5 books at a time
+librofm-downloader --limit 5
+```
+
+Or select specific books interactively:
+
+```bash
+librofm-downloader --select
+```
+
+Or limit to the first 5 new books:
+
+```bash
 librofm-downloader --limit 5
 ```
 

@@ -37,6 +37,9 @@ class PlainTextReporter:
         detail = f" ({reason})" if reason else ""
         self._print(f"Failed: {authors} - {book.title} [{book.isbn}]{detail}")
 
+    def stop(self) -> None:
+        """No-op for plain text mode — nothing to stop."""
+
     def update(self, completed: int, *, total: int | None = None) -> None:
         """No-op progress update — plain text mode has no progress bar."""
 
@@ -72,6 +75,10 @@ class PlainTextReporter:
                 authors = ", ".join(book.authors) if book.authors else "Unknown"
                 self._print(f"    ⏭ {authors} - {book.title} [{book.isbn}]")
 
+    def chapter_renamed(self, count: int, book_title: str, example_name: str) -> None:
+        """Log chapter rename result with example filename."""
+        self._print(f"  Renamed {count} chapter(s) for '{book_title}' → '{example_name}'")
+
     def _print(self, message: str) -> None:
         self._out.write(message + "\n")
         self._out.flush()
@@ -85,9 +92,17 @@ class ProgressReporter:
 
         self._console = Console(file=stdout or sys.stdout)
         self._progress = None  # Lazy init on first download
+        # Per-book identity mapping for concurrent downloads
+        self._tasks: dict[int, object] = {}  # task_id -> book
+        self._book_ids: dict[int, int] = {}  # id(book) -> task_id
 
-    def start_download(self, book, total_bytes: int = 0) -> None:
-        """Start a progress bar for this book's download."""
+    def start_download(self, book, total_bytes: int = 0) -> callable:
+        """Start a progress bar for this book's download.
+
+        Returns:
+            A bound callable ``(completed, *, total=None) -> None`` that updates
+            only this book's progress bar. Returns ``None`` for PlainTextReporter.
+        """
         from rich.progress import (
             BarColumn,
             DownloadColumn,
@@ -112,38 +127,70 @@ class ProgressReporter:
         description = f"{authors} - {book.title}"
         task_id = self._progress.add_task(description, total=total_bytes or None)
 
-        # Store task_id on self for update() to find it
-        # In practice we'd track per-book; for now store as current
-        self._current_task = task_id
-        self._current_book = book
-        self._start_time = time.monotonic()
+        # Store bidirectional mapping for per-book lookup
+        self._tasks[task_id] = book
+        self._book_ids[id(book)] = task_id
 
-    def update(self, completed: int, *, total: int | None = None) -> None:
-        """Update progress bar with bytes completed.
+        # Return a bound callable that carries task_id internally.
+        # Calls _progress.update() directly — bypasses the public update().
+        task_id_internal = task_id
+        _progress_obj = self._progress
 
-        If *total* is provided (e.g. from a Content-Length header), also
-        updates the task's total so that percentage and ETA can be computed.
-        """
-        if self._progress and hasattr(self, "_current_task"):
+        def _update(completed: int, *, total: int | None = None) -> None:
             kwargs: dict = {"completed": completed}
             if total is not None:
                 kwargs["total"] = total
-            self._progress.update(self._current_task, **kwargs)
+            _progress_obj.update(task_id_internal, **kwargs)
+
+        return _update
+
+    def update(self, completed: int, *, total: int | None = None) -> None:
+        """Update progress for the most recently started download.
+
+        This is a convenience fallback for callers that don't have a bound
+        callable from start_download(). It always targets the most-recently-started
+        task. For per-book targeting, use the bound callable returned by
+        start_download() instead.
+
+        Args:
+            completed: Bytes downloaded so far.
+            total: Optional new total (e.g. from Content-Length header).
+        """
+        if not self._progress or not self._tasks:
+            return
+        task_id = next(reversed(self._tasks))
+        kwargs: dict = {"completed": completed}
+        if total is not None:
+            kwargs["total"] = total
+        self._progress.update(task_id, **kwargs)
+
+    def stop(self) -> None:
+        """Stop the live progress display.
+
+        Must be called before printing any output outside the progress system,
+        e.g. in KeyboardInterrupt/exception handlers, to prevent display corruption.
+        """
+        if self._progress is not None:
+            self._progress.stop()
 
     def complete(self, book) -> None:
-        """Mark current progress bar as complete."""
-        if self._progress and hasattr(self, "_current_task"):
-            self._progress.update(self._current_task, completed=self._progress.tasks[self._current_task].total or 0)
-            self._console.print(f"  [green]✓[/green] {book.title}")
-            self._current_task = None
+        """Mark this book's progress bar as complete and remove it."""
+        task_id = self._book_ids.pop(id(book), None)
+        if task_id is None or not self._progress:
+            return
+        self._tasks.pop(task_id, None)
+        self._progress.update(task_id, completed=self._progress.tasks[task_id].total or 0)
+        self._console.print(f"  [green]✓[/green] {book.title}")
 
     def fail(self, book, reason: str = "") -> None:
-        """Mark current progress bar as failed."""
-        if self._progress and hasattr(self, "_current_task"):
-            self._progress.stop_task(self._current_task)
-            detail = f" ({reason})" if reason else ""
-            self._console.print(f"  [red]✗[/red] {book.title}[dim] [{book.isbn}]{detail}[/dim]")
-            self._current_task = None
+        """Mark this book's progress bar as failed and remove it."""
+        task_id = self._book_ids.pop(id(book), None)
+        if task_id is None or not self._progress:
+            return
+        self._tasks.pop(task_id, None)
+        self._progress.stop_task(task_id)
+        detail = f" ({reason})" if reason else ""
+        self._console.print(f"  [red]✗[/red] {book.title}[dim] [{book.isbn}]{detail}[/dim]")
 
     def summary(
         self,
@@ -171,6 +218,12 @@ class ProgressReporter:
                 authors = ", ".join(book.authors) if book.authors else "Unknown"
                 self._console.print(f"    ⏭ {authors} - {book.title} [{book.isbn}]")
 
+    def chapter_renamed(self, count: int, book_title: str, example_name: str) -> None:
+        """Log chapter rename result with example filename."""
+        self._console.print(
+            f"  [dim]Renamed[/dim] {count} chapter(s) for "
+            f"'[italic]{book_title}[/italic]' → [cyan]{example_name}[/cyan]"
+        )
 
 def _fmt_size(bytes_val: int) -> str:
     """Format byte count as human-readable size string."""

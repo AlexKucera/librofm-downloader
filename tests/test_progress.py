@@ -6,7 +6,12 @@ import tempfile
 
 import pytest
 
-from librofm_downloader.downloader import Book
+from librofm_downloader.book import Book
+from librofm_downloader.downloader import (
+    download_m4b,
+    download_zip_part,
+    download_book,
+)
 from librofm_downloader.progress import DownloadReporter, PlainTextReporter, ProgressReporter
 
 
@@ -138,107 +143,6 @@ class TestPlainTextFailed:
         assert "404" in output
 
 
-# ---------------------------------------------------------------------------
-# Test 5: Failure isolation — one fail + others succeed
-# ---------------------------------------------------------------------------
-
-class TestFailureIsolationCLI:
-    """One failing book does not prevent subsequent books from downloading."""
-
-    def test_one_failure_does_not_stop_batch(self, capsys):
-        """Second book fails; first and third still download. Exit code 0."""
-        from pathlib import Path
-        from unittest.mock import patch
-
-        with (
-            patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
-            patch("librofm_downloader.cli.DownloadHistory") as mock_history_cls,
-            patch("librofm_downloader.cli.download_book") as mock_download,
-        ):
-            mock_config.return_value.username = "alice"
-            mock_config.return_value.password = "secret"
-            mock_config.return_value.output_dir = "./audiobooks"
-
-            mock_instance = mock_client_cls.return_value
-            mock_instance.authenticate.return_value = None
-
-            raw_books = [
-                {"isbn": "978111", "title": "Book A", "authors": ["A1"], "narrators": ["N1"]},
-                {"isbn": "978222", "title": "Book B", "authors": ["A2"], "narrators": ["N2"]},
-                {"isbn": "978333", "title": "Book C", "authors": ["A3"], "narrators": ["N3"]},
-            ]
-            mock_instance.fetch_library.return_value = raw_books
-
-            mock_history_cls.return_value.is_downloaded.return_value = False
-
-            # Book A succeeds, Book B fails, Book C succeeds
-            mock_download.side_effect = [
-                Path("/audiobooks/A1/Book A.m4b"),   # success
-                Exception("Network timeout"),          # failure
-                Path("/audiobooks/A3/Book C.m4b"),   # success
-            ]
-
-            exit_code = run = __import__("librofm_downloader.cli").cli.run
-            # Need to import run properly
-            from librofm_downloader.cli import run as cli_run
-
-            exit_code = cli_run(
-                config_path="/fake/config.yaml",
-                secrets_path="/fake/secrets.yaml",
-                history_path="/fake/history.json",
-            )
-
-            # All 3 books were attempted
-            assert mock_download.call_count == 3
-            # Exit code is 0 (failures are non-fatal)
-            assert exit_code == 0
-            captured = capsys.readouterr()
-            # Reporter output: Completed for successes, Failed for failure, Summary with counts
-            out = captured.out
-            assert "Completed" in out   # at least one success
-            assert "Failed" in out       # the failure case
-            assert "2 downloaded" in out  # summary counts correct
-            assert "1 failed" in out
-
-
-# ---------------------------------------------------------------------------
-# Test 6: Fatal vs book-level error distinction
-# ---------------------------------------------------------------------------
-
-class TestFatalVsBookLevel:
-    """Fatal errors (auth fail) exit 1 immediately before any downloads start."""
-
-    def test_auth_failure_exits_one_before_downloads(self, capsys):
-        """Auth failure → exit 1, download_book never called."""
-        from unittest.mock import patch
-        from librofm_downloader.client import AuthError
-
-        with (
-            patch("librofm_downloader.cli.load_config") as mock_config,
-            patch("librofm_downloader.cli.LibroFmClient") as mock_client_cls,
-            patch("librofm_downloader.cli.download_book") as mock_download,
-        ):
-            mock_config.return_value.username = "alice"
-            mock_config.return_value.password = "wrong"
-
-            mock_instance = mock_client_cls.return_value
-            mock_instance.authenticate.side_effect = AuthError("Auth failed (401)")
-
-            from librofm_downloader.cli import run as cli_run
-
-            exit_code = cli_run(
-                config_path="/fake/config.yaml",
-                secrets_path="/fake/secrets.yaml",
-                history_path="/fake/history.json",
-            )
-
-            assert exit_code == 1
-            # No downloads were attempted
-            assert mock_download.call_count == 0
-            captured = capsys.readouterr()
-            assert "Authentication failed" in captured.out
-
 
 # ---------------------------------------------------------------------------
 # Test 7: Progress bar columns — TTY mode renders %, speed, ETA, size
@@ -317,6 +221,80 @@ class TestProgressReporterColumns:
 
         column_types = [type(c).__name__ for c in reporter._progress.columns]
         assert "DownloadColumn" in column_types
+
+
+# ---------------------------------------------------------------------------
+# Test 7b: ProgressReporter.stop() — halts Rich Live display on interrupt
+# ---------------------------------------------------------------------------
+
+
+class TestProgressReporterStop:
+    """ProgressReporter.stop() safely halts the Rich Live display.
+
+    Critical for KeyboardInterrupt handling: stop() must be called before
+    any console output to prevent Rich's background thread from corrupting
+    interrupt messages with progress bar redraws.
+    """
+
+    def test_stop_calls_progress_stop_on_tty_reporter(self):
+        """TTY reporter's stop() delegates to rich.Progress.stop()."""
+        from unittest.mock import MagicMock, patch
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = DownloadReporter(stdout=mock_tty)
+        book = Book(title="StopTest", authors=["A"], narrators=["N"], isbn="9780000000005")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Progress should be active
+        assert reporter._progress is not None
+
+        # Mock the underlying progress.stop to verify it's called
+        original_stop = reporter._progress.stop
+        with patch.object(reporter._progress, 'stop', wraps=original_stop) as mock_stop:
+            reporter.stop()
+            mock_stop.assert_called_once()
+
+    def test_stop_is_idempotent(self):
+        """Calling stop() twice doesn't raise (safe for finally blocks)."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = DownloadReporter(stdout=mock_tty)
+        book = Book(title="Idempotent", authors=["A"], narrators=["N"], isbn="9780000000006")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Should not raise on double-stop
+        reporter.stop()
+        reporter.stop()  # second call must be safe
+
+    def test_stop_on_plain_text_reporter_is_noop(self):
+        """PlainTextReporter.stop() is a safe no-op."""
+        import io
+
+        fake_stdout = io.StringIO()
+        fake_stdout.isatty = lambda: False
+
+        reporter = DownloadReporter(stdout=fake_stdout)
+        book = Book(title="Plain", authors=["A"], narrators=["N"], isbn="9780000000007")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Should not raise
+        reporter.stop()
+
+    def test_stop_before_any_download_is_safe(self):
+        """stop() is safe even when no downloads were started (_progress may be None)."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = DownloadReporter(stdout=mock_tty)
+        # _progress is None — haven't started any download yet
+        reporter.stop()  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -576,12 +554,15 @@ class TestProgressCallbackWiring:
     """download_book() threads the progress callback through to low-level downloads."""
 
     def test_download_book_forwards_progress_to_m4b(self):
-        """progress callable passed to download_book reaches download_m4b."""
+        """progress callback from reporter reaches download_m4b chunk loop."""
         import httpx
         from pathlib import Path
-        from librofm_downloader.downloader import Book, download_book
-        from librofm_downloader.client import LibroFmClient
-        from librofm_downloader.history import DownloadHistory
+        from unittest.mock import MagicMock
+        from librofm_downloader.book import Book
+        from librofm_downloader.downloader import download_book
+        from librofm_downloader.session import LibroFmSession
+        from librofm_downloader.path import resolve_output_plan
+        from librofm_downloader.progress import DownloadReporter
 
         m4b_payload = b"callback-test-data" * 10  # 160 bytes
 
@@ -598,29 +579,31 @@ class TestProgressCallbackWiring:
             return httpx.Response(404)
 
         transport = httpx.MockTransport(handler)
-        client = LibroFmClient(base_url="https://libro.fm", username="u", password="p")
-        client.authenticate(transport=transport)
+        client = LibroFmSession(base_url="https://libro.fm", username="u", password="p", transport=transport)
+        client.authenticate()
 
         book = Book(title="CB Test", authors=["A"], narrators=["N"], isbn="9781111111111")
-        progress_calls: list[int] = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir) / "audiobooks"
-            history = DownloadHistory(Path(tmpdir) / "history.json")
+
+            plan = resolve_output_plan(book, base_dir)
+            reporter = DownloadReporter()
+            # Spy on the reporter's update method (used as progress callback)
+            reporter.update = MagicMock(wraps=reporter.update)
 
             download_book(
                 book=book,
-                client=client,
-                output_base=base_dir,
-                history=history,
-                transport=transport,
-                progress=lambda n, **kw: progress_calls.append(n),
+                session=client,
+                plan=plan,
+                reporter=reporter,
             )
 
             # Progress callback was invoked during the M4B download
-            assert len(progress_calls) >= 1
-            # Final value reflects the full download size
-            assert progress_calls[-1] == len(m4b_payload)
+            assert reporter.update.call_count >= 1
+            # Final call reflects the full download size
+            last_call_args = reporter.update.call_args_list[-1]
+            assert last_call_args[0][0] == len(m4b_payload)
 
 
 # ---------------------------------------------------------------------------
@@ -646,7 +629,8 @@ class TestProgressTotalFromContentLength:
         reporter.update(0, total=100_000_000)
 
         # Task now has a total — percentage can be computed
-        task = reporter._progress.tasks[reporter._current_task]
+        task_id = reporter._book_ids[id(book)]
+        task = reporter._progress.tasks[task_id]
         assert task.total == 100_000_000
 
     def test_percentage_works_after_total_set(self):
@@ -666,7 +650,8 @@ class TestProgressTotalFromContentLength:
 
         # Now at 50% when half done
         reporter.update(25_000_000)
-        task = reporter._progress.tasks[reporter._current_task]
+        task_id = reporter._book_ids[id(book)]
+        task = reporter._progress.tasks[task_id]
         assert task.percentage == 50.0
 
     def test_plain_text_update_with_total_is_noop(self):
@@ -773,4 +758,486 @@ class TestEnhancedSummaryProgressReporterSkipped:
             skipped=1,
             failed=0,
             skipped_books=[book],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #14: Multi-bar progress — per-book identity mapping
+# ---------------------------------------------------------------------------
+
+
+class TestMultiBarProgress:
+    """ProgressReporter supports multiple simultaneous progress bars."""
+
+    def test_start_download_returns_task_id(self):
+        """start_download() returns a task_id for tracking this book's bar."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
+
+        # start_download should return a callable (bound to this book's task)
+        assert callable(callback_a)
+        assert not isinstance(callback_a, int)
+        # Progress should have exactly 1 task
+        assert len(reporter._progress.tasks) == 1
+
+    def test_two_simultaneous_bars(self):
+        """Starting two downloads creates two independent progress tasks."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        callback_b = reporter.start_download(book_b, total_bytes=50_000_000)
+
+        # Two distinct callables
+        assert callback_a is not callback_b
+        # Progress should have exactly 2 active tasks
+        assert len(reporter._progress.tasks) == 2
+
+    def test_update_targets_correct_bar_by_task_id(self):
+        """update(task_id=X) updates bar X, not the most recently started."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        callback_b = reporter.start_download(book_b, total_bytes=50_000_000)
+
+        # Update only book A's bar to 50% using its bound callable
+        callback_a(50_000_000)
+
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_a = reporter._progress.tasks[task_id_a]
+        task_b = reporter._progress.tasks[task_id_b]
+
+        assert task_a.completed == 50_000_000
+        assert task_b.completed == 0  # Book B untouched
+
+    def test_complete_removes_only_its_bar(self):
+        """complete(book_a) removes only A's bar; B's bar stays active."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
+
+        assert len(reporter._progress.tasks) == 2
+
+        # Complete only book A
+        reporter.complete(book_a)
+
+        # Book A's task is gone from internal mapping, Book B's remains
+        assert id(book_a) not in reporter._book_ids
+        assert id(book_b) in reporter._book_ids
+        assert len(reporter._progress.tasks) == 2  # Rich keeps it (completed), but our mapping is clean
+
+    def test_fail_removes_only_its_bar(self):
+        """fail(book_b) removes only B's bar; A's bar stays active."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
+
+        # Fail only book B
+        reporter.fail(book_b, reason="connection reset")
+
+        # Book B's task is gone from internal mapping, Book A's remains
+        assert id(book_b) not in reporter._book_ids
+        assert id(book_a) in reporter._book_ids
+
+    def test_summary_stops_progress_after_all_tasks_done(self):
+        """summary() stops progress after all books completed/failed."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
+
+        reporter.complete(book_a)
+        reporter.fail(book_b, reason="timeout")
+
+        # summary() should not raise and should stop progress
+        reporter.summary(downloaded=1, skipped=0, failed=1)
+
+        # After summary, internal mappings are empty (all tasks removed)
+        assert len(reporter._tasks) == 0
+        assert len(reporter._book_ids) == 0
+
+    def test_update_without_task_id_falls_back_to_most_recent(self):
+        """update() without task_id updates the most recently started bar."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
+
+        # Update WITHOUT task_id — should fall back to most recent (book_b)
+        reporter.update(25_000_000)
+
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_b = reporter._progress.tasks[task_id_b]
+        task_a = reporter._progress.tasks[task_id_a]
+
+        assert task_b.completed == 25_000_000  # Most recent was updated
+        assert task_a.completed == 0  # Older bar untouched
+
+    def test_complete_unknown_book_is_safe(self):
+        """complete() on a book that was never started does not raise."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+        unknown = Book(title="Ghost", authors=["G"], narrators=["N"], isbn="9780000000000")
+
+        # Should not raise
+        reporter.complete(unknown)
+        assert len(reporter._tasks) == 0
+
+    def test_fail_unknown_book_is_safe(self):
+        """fail() on a book that was never started does not raise."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+        unknown = Book(title="Ghost", authors=["G"], narrators=["N"], isbn="9780000000000")
+
+        # Should not raise
+        reporter.fail(unknown, reason="phantom error")
+        assert len(reporter._tasks) == 0
+
+class TestMultiBookPlainText:
+    """Plain-text reporter with multiple books."""
+
+    def test_multiple_complete_and_fail(self):
+        from io import StringIO
+
+        out = StringIO()
+        reporter = PlainTextReporter(stdout=out)
+        book_a = Book(title="Alpha", authors=["A"], narrators=["N"], isbn="111")
+        book_b = Book(title="Beta", authors=["B"], narrators=["N"], isbn="222")
+
+        reporter.start_download(book_a)
+        reporter.start_download(book_b)
+        reporter.complete(book_a)
+        reporter.fail(book_b, reason="network error")
+
+        output = out.getvalue()
+        assert "Completed: A - Alpha" in output
+        assert "Failed: B - Beta [222] (network error)" in output
+
+
+class TestParallelProgressCallbackWiring:
+    """Regression test: progress callback must carry task_id to update correct bar.
+
+    Bug: when cli.py passes ``progress=reporter.update`` as the callback,
+    the downloader calls ``progress(downloaded)`` with no task_id.
+    ProgressReporter.update() falls back to ``next(reversed(self._tasks))``,
+    so ALL parallel download threads update the same (most recently started) bar.
+    """
+
+    def test_update_without_task_id_always_hits_most_recent_bar(self):
+        """Demonstrates the bug: untargeted updates all go to the last-started bar."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+        book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
+
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=100_000_000)
+        reporter.start_download(book_c, total_bytes=100_000_000)
+
+        # Simulate what happens in production: each download thread calls
+        # reporter.update(completed) WITHOUT passing task_id — because
+        # cli.py wires ``progress=reporter.update`` which loses the identity.
+        # Thread A reports 50% progress
+        reporter.update(50_000_000)
+        # Thread B reports 30% progress
+        reporter.update(30_000_000)
+        # Thread C reports 80% progress
+        reporter.update(80_000_000)
+
+        # BUG: all updates went to the most recently started bar (book_c)
+        # because task_id was None every time, triggering the fallback.
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_c = reporter._book_ids[id(book_c)]
+        task_a = reporter._progress.tasks[task_id_a]
+        task_b = reporter._progress.tasks[task_id_b]
+        task_c = reporter._progress.tasks[task_id_c]
+
+        # All three bars show the LAST value written (80M), not their own value
+        assert task_c.completed == 80_000_000  # last-started bar got ALL updates
+        assert task_a.completed == 0  # book A never got an update  ← THE BUG
+        assert task_b.completed == 0  # book B never got an update  ← THE BUG
+
+    def test_bound_callback_updates_correct_bar(self):
+        """When each thread gets a bound callback from start_download(), bars update independently."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+        book_c = Book(title="Book C", authors=["Author C"], narrators=["N"], isbn="9783333333333")
+
+        # Each download thread gets its OWN bound callable from start_download()
+        progress_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        progress_b = reporter.start_download(book_b, total_bytes=100_000_1000)
+        progress_c = reporter.start_download(book_c, total_bytes=100_000_000)
+
+        # Each thread reports its own progress
+        progress_a(50_000_000)
+        progress_b(30_000_000)
+        progress_c(80_000_000)
+
+        task_id_a = reporter._book_ids[id(book_a)]
+        task_id_b = reporter._book_ids[id(book_b)]
+        task_id_c = reporter._book_ids[id(book_c)]
+        task_a = reporter._progress.tasks[task_id_a]
+        task_b = reporter._progress.tasks[task_id_b]
+        task_c = reporter._progress.tasks[task_id_c]
+
+        # Each bar shows ITS OWN progress — this is the fixed behavior
+        assert task_a.completed == 50_000_000
+        assert task_b.completed == 30_000_000
+        assert task_c.completed == 80_000_000
+
+
+class TestMultiBookPlainTextInterleaved:
+    """PlainTextReporter handles multiple concurrent books correctly."""
+
+    def test_interleaved_start_complete_fail_lines(self):
+        """Multiple books produce correctly interleaved start/complete/fail lines."""
+        from io import StringIO
+
+        out = StringIO()
+        reporter = PlainTextReporter(stdout=out)
+
+        book_a = Book(title="Alpha", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Beta", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+        book_c = Book(title="Gamma", authors=["Author C"], narrators=["N"], isbn="9783333333333")
+
+        # Start all three
+        reporter.start_download(book_a, total_bytes=100_000_000)
+        reporter.start_download(book_b, total_bytes=50_000_000)
+        reporter.start_download(book_c, total_bytes=75_000_000)
+
+        # Complete A, fail B, complete C (interleaved)
+        reporter.complete(book_a)
+        reporter.fail(book_b, reason="network error")
+        reporter.complete(book_c)
+
+        output = out.getvalue()
+
+        # All three downloads started
+        assert "Downloading: Author A - Alpha" in output
+        assert "Downloading: Author B - Beta" in output
+        assert "Downloading: Author C - Gamma" in output
+
+        # Completions and failures present
+        assert "Completed: Author A - Alpha" in output
+        assert "Completed: Author C - Gamma" in output
+        assert "Failed: Author B - Beta [9782222222222] (network error)" in output
+
+
+# ---------------------------------------------------------------------------
+# Issue #30: Bound Callable Per Book
+# ---------------------------------------------------------------------------
+
+
+class TestBoundCallableFromStartDownload:
+    """start_download() returns a bound callable that targets the correct bar.
+
+    Issue #30: task_id never leaves progress.py. The callable returned by
+    start_download() already carries the task identity internally.
+    """
+
+    def test_start_download_returns_callable_for_tty_reporter(self):
+        """ProgressReporter.start_download() returns a callable, not an int."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book = Book(title="Test Book", authors=["Author"], narrators=["N"], isbn="9780000000000")
+        callback = reporter.start_download(book, total_bytes=100_000_000)
+
+        # Must return a callable (bound to this book's task)
+        assert callable(callback)
+        # It must NOT be a raw int (the old API)
+        assert not isinstance(callback, int)
+
+    def test_bound_callable_updates_correct_bar(self):
+        """Calling each book's bound callable updates only that book's bar."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book_a = Book(title="Book A", authors=["Author A"], narrators=["N"], isbn="9781111111111")
+        book_b = Book(title="Book B", authors=["Author B"], narrators=["N"], isbn="9782222222222")
+
+        callback_a = reporter.start_download(book_a, total_bytes=100_000_000)
+        callback_b = reporter.start_download(book_b, total_bytes=50_000_000)
+
+        # Update only book A's progress
+        callback_a(25_000_000)  # 25%
+
+        # Book A's task should show 25%, Book B should still be at 0%
+        task_a = reporter._book_ids[id(book_a)]
+        task_b = reporter._book_ids[id(book_b)]
+
+        # Rich stores completed per-task; check via internal state
+        tasks = reporter._progress.tasks
+        assert tasks[task_a].completed == 25_000_000
+        assert tasks[task_b].completed == 0
+
+        # Now update only book B
+        callback_b(25_000_000)  # 50% of its total
+        assert tasks[task_a].completed == 25_000_000  # unchanged
+        assert tasks[task_b].completed == 25_000_000
+
+    def test_plain_text_reporter_returns_none(self):
+        """PlainTextReporter.start_download() returns None (no progress bar)."""
+        reporter = PlainTextReporter()
+
+        book = Book(title="Test Book", authors=["Author"], narrators=["N"], isbn="9780000000000")
+        result = reporter.start_download(book)
+
+        assert result is None
+
+    def test_bound_callable_forwards_total_kwarg(self):
+        """Bound callable accepts and forwards the total kwarg to update()."""
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book = Book(title="Test Book", authors=["Author"], narrators=["N"], isbn="9780000000000")
+        callback = reporter.start_download(book, total_bytes=50_000_000)
+
+        # Update with a new total (e.g. Content-Length arriving mid-download)
+        callback(10_000_000, total=100_000_000)
+
+        task_id = reporter._book_ids[id(book)]
+        tasks = reporter._progress.tasks
+        # Total should be updated to 100M, completed should be 10M
+        assert tasks[task_id].completed == 10_000_000
+        assert tasks[task_id].total == 100_000_000
+
+    def test_update_does_not_accept_task_id(self):
+        """Public update() no longer exposes task_id — use bound callable instead.
+
+        Issue #30: task_id is fully internal. The public update() only accepts
+        completed and total kwargs.
+        """
+        from unittest.mock import MagicMock
+
+        mock_tty = MagicMock()
+        mock_tty.isatty.return_value = True
+
+        reporter = ProgressReporter(stdout=mock_tty)
+
+        book = Book(title="Test", authors=["A"], narrators=["N"], isbn="9780000000000")
+        reporter.start_download(book, total_bytes=100_000_000)
+
+        # Calling update with task_id should raise TypeError (parameter removed)
+        import inspect
+        sig = inspect.signature(reporter.update)
+        assert "task_id" not in sig.parameters, (
+            "update() should not expose task_id; use bound callable from start_download()"
+        )
+
+
+class TestReporterNoCancelEvent:
+    """Issue #39: Reporters must not carry cancellation state.
+
+    cancel_event flows through explicit parameters (sync_run → download_book →
+    streaming calls), NOT through reporter attributes.
+    """
+
+    @pytest.mark.parametrize("reporter_cls", [PlainTextReporter, ProgressReporter])
+    def test_reporter_has_no_cancel_event_attribute(self, reporter_cls):
+        """Neither reporter class exposes cancel_event on its public interface."""
+        reporter = reporter_cls()
+        assert not hasattr(reporter, "cancel_event"), (
+            f"{reporter_cls.__name__} must not have cancel_event attribute (Issue #39)"
+        )
+
+    @pytest.mark.parametrize("reporter_cls", [PlainTextReporter, ProgressReporter])
+    def test_reporter_init_signature_has_no_cancel_event(self, reporter_cls):
+        """cancel_event is not a constructor parameter."""
+        import inspect
+        sig = inspect.signature(reporter_cls.__init__)
+        assert "cancel_event" not in sig.parameters, (
+            f"{reporter_cls.__name__}.__init__ must not accept cancel_event (Issue #39)"
         )

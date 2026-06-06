@@ -12,11 +12,14 @@ librofm-downloader [OPTIONS]
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--config` | | `config.yaml` | Path to `config.yaml` |
-| `--secrets` | | `secrets.yaml` | Path to `secrets.yaml` |
-| `--history` | | `download_history.json` | Path to download history JSON file |
+| `--config` | | XDG → CWD search | Path to `config.yaml` (overrides default search) |
+| `--secrets` | | XDG → CWD search | Path to `secrets.yaml` (overrides default search) |
+| `--history` | | XDG → CWD search | Path to download history JSON (overrides default search) |
 | `-v, --verbose` | | off | Print extra detail (URLs, paths, API responses) |
 | `--limit` N | | `0` (no limit) | Maximum number of books to download |
+| `--rename-chapters` | | config | Rename extracted MP3 files with chapter titles |
+| `--select` | | off | Interactive book selection (checkbox prompt) |
+| `-w, --workers` N | | `3` | Number of parallel download workers (1 = sequential) |
 
 ### --verbose
 
@@ -24,9 +27,9 @@ Shows internal pipeline state at each stage:
 
 ```
 ── config ──────────────────────────────────────
-  config:  config.yaml
-  secrets: secrets.yaml
-  history: download_history.json
+  config:   ~/.config/librofm-downloader/config.yaml
+  secrets:  ~/.config/librofm-downloader/secrets.yaml
+  history:  ~/.config/librofm-downloader/download_history.json
   format:   m4b_mp3_fallback
   output:   ./audiobooks
   extras:   True
@@ -58,6 +61,93 @@ librofm-downloader --limit 3 -v
 ```
 
 Books are processed in the order returned by the Libro.fm API. Already-downloaded books are filtered out **before** the limit is applied.
+
+### --workers
+
+Controls how many books download simultaneously:
+
+```bash
+# Default: 3 parallel downloads
+librofm-downloader
+
+# High-bandwidth connection: 5 workers
+librofm-downloader -w 5
+
+# Force sequential (useful for debugging)
+librofm-downloader --workers 1
+```
+
+Resolution order (CLI > config > default):
+
+1. **`--workers N`** / **`-w N`** on the command line
+2. **`workers:`** field in `config.yaml`
+3. **Default: 3**
+
+> [!NOTE]
+> The worker count controls **CDN download parallelism**. Libro.fm API calls are separately capped at 3 concurrent requests via an internal semaphore, regardless of worker count. This protects the API server while letting CDN transfers scale up.
+
+Set to `1` for behavior identical to the pre-parallelism sequential mode.
+
+### --select
+
+Launch an interactive book selection prompt before downloading:
+
+```bash
+# Pick which books to download from a checkbox list
+librofm-downloader --select
+```
+
+**Flow:**
+
+1. Tool fetches your library and filters already-downloaded books
+2. A checkbox prompt appears — use **space** to toggle, arrows to navigate, **enter** to confirm
+3. A confirmation summary shows your selection
+4. Only selected books are downloaded
+
+**Behavior notes:**
+
+- Requires an interactive terminal (TTY). Non-interactive environments (cron, pipes) produce an error and exit
+- When `--select` is active, `--limit` is superseded — a notice is printed if both are specified
+- Books are downloaded in the order they appear in your library (selection order is preserved)
+
+**Row format:**
+
+```
+  1. The Way of Kings — Brandon Sanderson [Stormlight Archive #1]
+  2. Mistborn — Brandon Sanderson [Mistborn #1]
+  3. Elantris — Brandon Sanderson
+```
+
+Series info and number are shown when available.
+
+### --rename-chapters
+
+Rename extracted MP3 files with chapter titles from the download manifest:
+
+```bash
+# Enable chapter renaming (overrides config)
+librofm-downloader --rename-chapters
+```
+
+**Resolution order (CLI > config > default):**
+
+1. **`--rename-chapters`** flag on the command line
+2. **`rename_chapters:`** field in `config.yaml`
+3. **Default: `true`**
+
+Only applies when the download pipeline uses MP3 files (`m4b_mp3_fallback` fallback path or `mp3_only` mode). M4B files have built-in chapter metadata and are not affected.
+
+**Example renaming:**
+
+```
+# Before (raw ZIP extraction)
+01.mp3  02.mp3  03.mp3  04.mp3
+
+# After (--rename-chapters, default)
+001 - Opening.mp3  002 - The Arrival.mp3  003 - Revelations.mp3  004 - Departure.mp3
+```
+
+Files are zero-padded to match the widest track number (3 digits for 10-999 tracks, 2 for fewer).
 
 ## Exit codes
 

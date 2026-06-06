@@ -5,13 +5,16 @@
 
 **Download owned audiobooks from your Libro.fm account** — a lightweight, dependency-minimal CLI tool written in Python.
 
-No Docker. No JVM. Just `pip install` and go.
+No Docker. No JVM. Just Python and go.
 
 ## Features
 
 - **Full library sync** — fetches every audiobook in your Libro.fm account with automatic pagination
+- **Interactive book selection** — pick which books to download with `--select` (checkbox prompt)
 - **M4B + MP3 formats** — downloads M4B (single file) or MP3 (ZIP parts extracted) with automatic fallback
+- **Chapter renaming** — MP3 files renamed with chapter titles from the manifest (configurable)
 - **Resume support** — interrupted downloads pick up where they left off via `.partial` files
+- **Parallel downloads** — `ThreadPoolExecutor` downloads multiple books simultaneously; configurable via `--workers N` (default 3)
 - **Cover art & PDF extras** — optional download of cover images and accompanying PDFs
 - **Customizable output paths** — token-based patterns for organizing your library on disk
 - **TTY-aware progress** — rich progress bars in your terminal, clean log lines in cron jobs
@@ -21,11 +24,18 @@ No Docker. No JVM. Just `pip install` and go.
 ## Quick Start
 
 ```bash
-# 1. Install
-pip install librofm-downloader
+# 1. Install from source
+git clone https://github.com/AlexKucera/librofm-downloader.git
+cd librofm-downloader
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -e .
 
-# 2. Configure
-cat > config.yaml << 'EOF'
+# 2. Create XDG config directory
+mkdir -p ~/.config/librofm-downloader
+
+# 3. Configure
+cat > ~/.config/librofm-downloader/config.yaml << 'EOF'
 librofm:
   format: m4b_mp3_fallback
   output_dir: ./audiobooks
@@ -33,14 +43,18 @@ librofm:
   download_covers: true
 EOF
 
-cat > secrets.yaml << 'EOF'
+cat > ~/.config/librofm-downloader/secrets.yaml << 'EOF'
 librofm:
   username: your-email@example.com
   password: your-password
 EOF
 
 # 3. Run
-librofm-downloader
+librofm-downloader            # default: 3 parallel workers
+librofm-downloader --select   # pick books interactively
+librofm-downloader -w 5      # 5 parallel workers
+librofm-downloader --workers 1  # sequential (1 worker)
+librofm-downloader --limit 5  # only download 5 new books
 ```
 
 ## Documentation
@@ -73,7 +87,7 @@ Output paths follow a sensible default (`Author/Series/Book N Title` for series,
 
 ## Comparison
 
-This project is a **lightweight Python alternative** to the [Kotlin-based Docker container](https://github.com/advplyr/librofm-audiobook-downloader) that runs a full JVM. If you want something you can `pip install`, debug with standard Python tooling, and run without Docker — this is it.
+This project is a **lightweight Python alternative** to the [Kotlin-based Docker container](https://github.com/advplyr/librofm-audiobook-downloader) that runs a full JVM. If you want something you can debug with standard Python tooling and run without Docker — this is it.
 
 ## License
 

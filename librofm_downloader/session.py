@@ -1,6 +1,14 @@
-"""HTTP client for Libro.fm API — auth and library fetch."""
+"""HTTP session for Libro.fm API — auth, library fetch, and rate-limited downloads."""
+
+from __future__ import annotations
+
+import threading
 
 import httpx
+
+# Maximum concurrent Libro.fm API calls (not CDN downloads).
+# Configurable constant — not user-facing.
+API_SEMAPHORE_CAPACITY = 3
 
 
 class AuthError(Exception):
@@ -11,8 +19,13 @@ class M4BUnavailableError(Exception):
     """M4B format is not available for this book (404 from API)."""
 
 
-class LibroFmClient:
-    """Libro.fm API client with OAuth2 password grant and library fetching."""
+class LibroFmSession:
+    """Libro.fm API session with OAuth2 password grant and library fetching.
+
+    Constructs a single shared ``httpx.Client`` at instantiation time.
+    All endpoint methods reuse this client, so transport injection (for
+    testing) happens once via the ``transport`` keyword argument.
+    """
 
     DEFAULT_HEADERS = {
         "X-LibroFm-AppVer": "7.34.8",
@@ -25,18 +38,39 @@ class LibroFmClient:
         username: str = "",
         password: str = "",
         timeout: float = 30.0,
+        *,
+        transport: httpx.BaseTransport | None = None,
     ):
         self._base_url = base_url.rstrip("/")
         self._username = username
         self._password = password
         self._timeout = timeout
         self._access_token: str | None = None
+        self._api_semaphore = threading.Semaphore(API_SEMAPHORE_CAPACITY)
+        self._transport = transport
 
-    def authenticate(self, transport: httpx.BaseTransport | None = None) -> str:
+        self._client = httpx.Client(
+            base_url=self._base_url,
+            headers=self.DEFAULT_HEADERS,
+            timeout=self._timeout,
+            transport=transport,
+        )
+
+    @property
+    def transport(self) -> httpx.BaseTransport | None:
+        """Return the httpx transport for streaming downloads.
+
+        Stored at construction time to avoid reaching into
+        ``httpx.Client._transport``, which is private API.
+        """
+        return self._transport
+
+    def authenticate(self) -> str:
         """OAuth2 password grant → returns access_token.
 
-        Args:
-            transport: Optional httpx transport override for testing.
+        Uses the shared ``self._client`` (no transport parameter).
+        After successful auth, stores the Bearer token on the client
+        headers so all subsequent endpoint calls are authenticated.
 
         Returns:
             The access token string.
@@ -44,15 +78,8 @@ class LibroFmClient:
         Raises:
             AuthError: If credentials are invalid or the request fails.
         """
-        client = httpx.Client(
-            base_url=self._base_url,
-            headers=self.DEFAULT_HEADERS,
-            timeout=self._timeout,
-            transport=transport,
-        )
-
         try:
-            resp = client.post(
+            resp = self._client.post(
                 "/oauth/token",
                 data={
                     "grant_type": "password",
@@ -63,15 +90,15 @@ class LibroFmClient:
             resp.raise_for_status()
             token_data = resp.json()
             self._access_token = token_data["access_token"]
+            self._client.headers["Authorization"] = f"Bearer {self._access_token}"
             return self._access_token
         except httpx.HTTPStatusError as exc:
             raise AuthError(f"Auth failed ({exc.response.status_code})") from exc
 
-    def fetch_library(self, transport: httpx.BaseTransport | None = None) -> list[dict]:
+    def fetch_library(self) -> list[dict]:
         """Fetch all books from the user's library, paginating automatically.
 
-        Args:
-            transport: Optional httpx transport override for testing.
+        Uses the shared ``self._client`` (no transport parameter).
 
         Returns:
             List of book dicts across all pages.
@@ -82,19 +109,11 @@ class LibroFmClient:
         if not self._access_token:
             raise AuthError("Not authenticated. Call authenticate() first.")
 
-        headers = {**self.DEFAULT_HEADERS, "Authorization": f"Bearer {self._access_token}"}
         all_books: list[dict] = []
-
-        client = httpx.Client(
-            base_url=self._base_url,
-            headers=headers,
-            timeout=self._timeout,
-            transport=transport,
-        )
-
         next_url = "/api/v10/library"
+
         while next_url:
-            resp = client.get(next_url)
+            resp = self._client.get(next_url)
             resp.raise_for_status()
             data = resp.json()
             all_books.extend(data.get("audiobooks", []))
@@ -102,13 +121,14 @@ class LibroFmClient:
 
         return all_books
 
-
-    def fetch_m4b_url(self, isbn: str, transport: httpx.BaseTransport | None = None) -> str:
+    def fetch_m4b_url(self, isbn: str) -> str:
         """Fetch the M4B download URL for a given ISBN.
+
+        Uses the shared ``self._client`` (no transport parameter).
+        Rate-limited by the API semaphore.
 
         Args:
             isbn: The ISBN of the audiobook.
-            transport: Optional httpx transport override for testing.
 
         Returns:
             The CDN URL string for the M4B file.
@@ -120,34 +140,24 @@ class LibroFmClient:
         if not self._access_token:
             raise AuthError("Not authenticated. Call authenticate() first.")
 
-        headers = {**self.DEFAULT_HEADERS, "Authorization": f"Bearer {self._access_token}"}
+        with self._api_semaphore:
+            resp = self._client.get(f"/api/v10/audiobooks/{isbn}/packaged_m4b")
 
-        client = httpx.Client(
-            base_url=self._base_url,
-            headers=headers,
-            timeout=self._timeout,
-            transport=transport,
-        )
+            if resp.status_code == 404:
+                raise M4BUnavailableError(f"M4B not available for ISBN {isbn}")
 
-        resp = client.get(f"/api/v10/audiobooks/{isbn}/packaged_m4b")
+            resp.raise_for_status()
+            data = resp.json()
+            return data["m4b_url"]
 
-        if resp.status_code == 404:
-            raise M4BUnavailableError(f"M4B not available for ISBN {isbn}")
-
-        resp.raise_for_status()
-        data = resp.json()
-        return data["m4b_url"]
-
-    def fetch_download_manifest(
-        self,
-        isbn: str,
-        transport: httpx.BaseTransport | None = None,
-    ) -> dict:
+    def fetch_download_manifest(self, isbn: str) -> dict:
         """Fetch the MP3 download manifest for a given ISBN.
+
+        Uses the shared ``self._client`` (no transport parameter).
+        Rate-limited by the API semaphore.
 
         Args:
             isbn: The ISBN of the audiobook.
-            transport: Optional httpx transport override for testing.
 
         Returns:
             Dict with ``parts`` (list of {url, name}) and
@@ -160,35 +170,24 @@ class LibroFmClient:
         if not self._access_token:
             raise AuthError("Not authenticated. Call authenticate() first.")
 
-        headers = {**self.DEFAULT_HEADERS, "Authorization": f"Bearer {self._access_token}"}
+        with self._api_semaphore:
+            resp = self._client.get("/api/v10/download-manifest", params={"isbn": isbn})
 
-        client = httpx.Client(
-            base_url=self._base_url,
-            headers=headers,
-            timeout=self._timeout,
-            transport=transport,
-        )
+            if resp.status_code == 404:
+                raise M4BUnavailableError(f"MP3 manifest not available for ISBN {isbn}")
 
-        resp = client.get("/api/v10/download-manifest", params={"isbn": isbn})
+            resp.raise_for_status()
+            return resp.json()
 
-        if resp.status_code == 404:
-            raise M4BUnavailableError(f"MP3 manifest not available for ISBN {isbn}")
-
-        resp.raise_for_status()
-        return resp.json()
-
-    def fetch_pdf_extra_url(
-        self,
-        isbn: str,
-        filename: str,
-        transport: httpx.BaseTransport | None = None,
-    ) -> str:
+    def fetch_pdf_extra_url(self, isbn: str, filename: str) -> str:
         """Fetch the PDF extra download URL for a given ISBN and filename.
+
+        Uses the shared ``self._client`` (no transport parameter).
+        Rate-limited by the API semaphore.
 
         Args:
             isbn: The ISBN of the audiobook.
             filename: The name of the PDF file to fetch.
-            transport: Optional httpx transport override for testing.
 
         Returns:
             The CDN URL string for the PDF file.
@@ -199,17 +198,12 @@ class LibroFmClient:
         if not self._access_token:
             raise AuthError("Not authenticated. Call authenticate() first.")
 
-        headers = {**self.DEFAULT_HEADERS, "Authorization": f"Bearer {self._access_token}"}
+        with self._api_semaphore:
+            resp = self._client.get(
+                f"/api/v10/library/{isbn}/pdf_extra_url",
+                params={"filename": filename},
+            )
 
-        client = httpx.Client(
-            base_url=self._base_url,
-            headers=headers,
-            timeout=self._timeout,
-            transport=transport,
-        )
-
-        resp = client.get(f"/api/v10/library/{isbn}/pdf_extra_url", params={"filename": filename})
-
-        resp.raise_for_status()
-        data = resp.json()
-        return data["pdf_url"]
+            resp.raise_for_status()
+            data = resp.json()
+            return data["pdf_url"]

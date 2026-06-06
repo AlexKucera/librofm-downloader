@@ -8,6 +8,9 @@ import pytest
 
 from librofm_downloader.history import DownloadHistory, HistoryEntry
 
+from librofm_downloader.history import _write_history
+from librofm_downloader.book import Book
+
 
 class TestWriteAndRead:
     """Tracer bullet: write an entry and read it back by ISBN."""
@@ -101,3 +104,172 @@ class TestCorruptRecovery:
             history = DownloadHistory(history_path)
 
             assert history.is_downloaded("978111") is False
+
+
+class TestThreadSafety:
+    """Issue #13: DownloadHistory.write() is safe for concurrent callers."""
+
+    def test_has_lock_attribute(self):
+        """DownloadHistory initialises a _lock threading.Lock."""
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history = DownloadHistory(Path(tmpdir) / "history.json")
+
+            assert hasattr(history, "_lock")
+            assert isinstance(history._lock, type(threading.Lock()))
+
+    def test_write_acquires_lock(self):
+        """write() acquires _lock during execution and releases it after."""
+        import time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history = DownloadHistory(Path(tmpdir) / "history.json")
+            entry = HistoryEntry(
+                isbn="978000",
+                title="Test Book",
+                format="m4b",
+                path=str(Path(tmpdir) / "book.m4b"),
+                downloaded_at="2026-06-03T00:00:00Z",
+            )
+
+            lock_held_during_write = []
+
+            original_flush = history._flush
+
+            def slow_flush():
+                lock_held_during_write.append(history._lock.locked())
+                time.sleep(0.05)
+                original_flush()
+
+            history._flush = slow_flush
+
+            assert history._lock.locked() is False
+            history.write(entry)
+            assert history._lock.locked() is False  # released after
+            assert lock_held_during_write == [True], "Lock must be held during _flush"
+
+    def test_concurrent_writes_no_lost_entries(self):
+        """Multiple threads calling write() simultaneously don't lose entries."""
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history = DownloadHistory(Path(tmpdir) / "history.json")
+
+            num_threads = 20
+            entries = [
+                HistoryEntry(
+                    isbn=f"978{i:03d}",
+                    title=f"Book {i}",
+                    format="m4b",
+                    path=str(Path(tmpdir) / f"book{i}.m4b"),
+                    downloaded_at=f"2026-06-03T{i:02d}:00:00Z",
+                )
+                for i in range(num_threads)
+            ]
+
+            threads = [
+                threading.Thread(target=history.write, args=(entries[i],))
+                for i in range(num_threads)
+            ]
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+
+            # All entries must be present — none lost to race conditions
+            for i in range(num_threads):
+                assert history.is_downloaded(f"978{i:03d}"), f"Entry 978{i:03d} was lost"
+
+    def test_concurrent_writes_produce_valid_json(self):
+        """Concurrent writes don't corrupt the on-disk JSON file."""
+        import json
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history = DownloadHistory(Path(tmpdir) / "history.json")
+
+            num_threads = 20
+            entries = [
+                HistoryEntry(
+                    isbn=f"999{i:03d}",
+                    title=f"Concurrent {i}",
+                    format="mp3",
+                    path=str(Path(tmpdir) / f"c{i}.mp3"),
+                    downloaded_at=f"2026-06-04T{i:02d}:00:00Z",
+                )
+                for i in range(num_threads)
+            ]
+
+            threads = [
+                threading.Thread(target=history.write, args=(entries[i],))
+                for i in range(num_threads)
+            ]
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+
+            # On-disk file must be valid JSON
+            raw = history._path.read_text()
+            data = json.loads(raw)  # raises if corrupted
+            assert len(data) == num_threads
+
+    def test_sequential_behavior_unchanged(self):
+        """Sequential writes still work exactly as before (regression)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history = DownloadHistory(Path(tmpdir) / "history.json")
+
+            entry1 = HistoryEntry(
+                isbn="111",
+                title="First",
+                format="m4b",
+                path=str(Path(tmpdir) / "first.m4b"),
+                downloaded_at="2026-01-01T00:00:00Z",
+            )
+            entry2 = HistoryEntry(
+                isbn="222",
+                title="Second",
+                format="mp3",
+                path=str(Path(tmpdir) / "second.mp3"),
+                downloaded_at="2026-02-01T00:00:00Z",
+            )
+
+            history.write(entry1)
+            history.write(entry2)
+
+            assert history.is_downloaded("111") is True
+            assert history.is_downloaded("222") is True
+            assert history.is_downloaded("999") is False
+
+            found = history.find("111")
+            assert found is not None
+            assert found.title == "First"
+
+
+
+class TestWriteHistoryRelocated:
+    """Issue #40: _write_history() lives in history.py, not downloader.py."""
+
+    def test_write_history_creates_entry_via_history_module(self):
+        """_write_history() imported from history.py writes a correct HistoryEntry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history_path = Path(tmpdir) / "download_history.json"
+            history = DownloadHistory(history_path)
+            book = Book(
+                title="Test Relocation",
+                authors=["Author"],
+                narrators=["Narrator"],
+                isbn="9780000000001",
+            )
+
+            _write_history(history, book, "m4b", "/audiobooks/Test/Test.m4b")
+
+            entry = history.find("9780000000001")
+            assert entry is not None
+            assert entry.title == "Test Relocation"
+            assert entry.format == "m4b"
+            assert entry.path == "/audiobooks/Test/Test.m4b"
+            assert entry.downloaded_at  # non-empty ISO timestamp

@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.618322db.min.css">
       
         
         <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
@@ -738,6 +738,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --workers
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1007,6 +1018,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --workers
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1201,20 +1223,20 @@
 <tr>
 <td><code>--config</code></td>
 <td></td>
-<td><code>config.yaml</code></td>
-<td>Path to <code>config.yaml</code></td>
+<td>XDG → CWD search</td>
+<td>Path to <code>config.yaml</code> (overrides default search)</td>
 </tr>
 <tr>
 <td><code>--secrets</code></td>
 <td></td>
-<td><code>secrets.yaml</code></td>
-<td>Path to <code>secrets.yaml</code></td>
+<td>XDG → CWD search</td>
+<td>Path to <code>secrets.yaml</code> (overrides default search)</td>
 </tr>
 <tr>
 <td><code>--history</code></td>
 <td></td>
-<td><code>download_history.json</code></td>
-<td>Path to download history JSON file</td>
+<td>XDG → CWD search</td>
+<td>Path to download history JSON (overrides default search)</td>
 </tr>
 <tr>
 <td><code>-v, --verbose</code></td>
@@ -1228,14 +1250,20 @@
 <td><code>0</code> (no limit)</td>
 <td>Maximum number of books to download</td>
 </tr>
+<tr>
+<td><code>-w, --workers</code> N</td>
+<td></td>
+<td><code>3</code></td>
+<td>Number of parallel download workers (1 = sequential)</td>
+</tr>
 </tbody>
 </table>
 <h3 id="-verbose">--verbose</h3>
 <p>Shows internal pipeline state at each stage:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span_0__-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>── config ──────────────────────────────────────
-</span><span id="__span_0__-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  config:  config.yaml
-</span><span id="__span_0__-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  secrets: secrets.yaml
-</span><span id="__span_0__-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  history: download_history.json
+</span><span id="__span_0__-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  config:   ~/.config/librofm-downloader/config.yaml
+</span><span id="__span_0__-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  secrets:  ~/.config/librofm-downloader/secrets.yaml
+</span><span id="__span_0__-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  history:  ~/.config/librofm-downloader/download_history.json
 </span><span id="__span_0__-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  format:   m4b_mp3_fallback
 </span><span id="__span_0__-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  output:   ./audiobooks
 </span><span id="__span_0__-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  extras:   True
@@ -1262,6 +1290,28 @@
 </span><span id="__span_0__-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>librofm-downloader<span class="w"> </span>--limit<span class="w"> </span><span class="m">3</span><span class="w"> </span>-v
 </span></code></pre></div>
 <p>Books are processed in the order returned by the Libro.fm API. Already-downloaded books are filtered out <strong>before</strong> the limit is applied.</p>
+<h3 id="-workers">--workers</h3>
+<p>Controls how many books download simultaneously:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Default: 3 parallel downloads</span>
+</span><span id="__span_0__-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>librofm-downloader
+</span><span id="__span_0__-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span_0__-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># High-bandwidth connection: 5 workers</span>
+</span><span id="__span_0__-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>librofm-downloader<span class="w"> </span>-w<span class="w"> </span><span class="m">5</span>
+</span><span id="__span_0__-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+</span><span id="__span_0__-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Force sequential (useful for debugging)</span>
+</span><span id="__span_0__-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>librofm-downloader<span class="w"> </span>--workers<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div>
+<p>Resolution order (CLI &gt; config &gt; default):</p>
+<ol>
+<li><strong><code>--workers N</code></strong> / <strong><code>-w N</code></strong> on the command line</li>
+<li><strong><code>workers:</code></strong> field in <code>config.yaml</code></li>
+<li><strong>Default: 3</strong></li>
+</ol>
+<blockquote>
+<p>[!NOTE]
+The worker count controls <strong>CDN download parallelism</strong>. Libro.fm API calls are separately capped at 3 concurrent requests via an internal semaphore, regardless of worker count. This protects the API server while letting CDN transfers scale up.</p>
+</blockquote>
+<p>Set to <code>1</code> for behavior identical to the pre-parallelism sequential mode.</p>
 <h2 id="exit-codes">Exit codes</h2>
 <table>
 <thead>
@@ -1297,62 +1347,62 @@ Exit code 0 does <strong>not</strong> mean "zero failures" — it means the proc
 Check the summary line for <code>failed</code> count.</p>
 </blockquote>
 <h3 id="exit-code-1-scenarios">Exit code 1 scenarios</h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Config error</span>
-</span><span id="__span_0__-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>$<span class="w"> </span>librofm-downloader<span class="w"> </span>--config<span class="w"> </span>missing.yaml
-</span><span id="__span_0__-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>Config<span class="w"> </span>error:<span class="w"> </span><span class="o">[</span>Errno<span class="w"> </span><span class="m">2</span><span class="o">]</span><span class="w"> </span>No<span class="w"> </span>such<span class="w"> </span>file<span class="w"> </span>or<span class="w"> </span>directory:<span class="w"> </span><span class="s1">&#39;missing.yaml&#39;</span>
-</span><span id="__span_0__-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
-</span><span id="__span_0__-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Auth failure</span>
-</span><span id="__span_0__-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>$<span class="w"> </span>librofm-downloader
-</span><span id="__span_0__-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>Authentication<span class="w"> </span>failed:<span class="w"> </span>Auth<span class="w"> </span>failed<span class="w"> </span><span class="o">(</span><span class="m">401</span><span class="o">)</span>
-</span><span id="__span_0__-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
-</span><span id="__span_0__-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># Library fetch failure</span>
-</span><span id="__span_0__-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>$<span class="w"> </span>librofm-downloader
-</span><span id="__span_0__-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>Failed<span class="w"> </span>to<span class="w"> </span>fetch<span class="w"> </span>library:<span class="w"> </span><span class="m">502</span><span class="w"> </span>Bad<span class="w"> </span>Gateway
+<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Config error</span>
+</span><span id="__span_0__-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>$<span class="w"> </span>librofm-downloader<span class="w"> </span>--config<span class="w"> </span>missing.yaml
+</span><span id="__span_0__-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>Config<span class="w"> </span>error:<span class="w"> </span><span class="o">[</span>Errno<span class="w"> </span><span class="m">2</span><span class="o">]</span><span class="w"> </span>No<span class="w"> </span>such<span class="w"> </span>file<span class="w"> </span>or<span class="w"> </span>directory:<span class="w"> </span><span class="s1">&#39;missing.yaml&#39;</span>
+</span><span id="__span_0__-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+</span><span id="__span_0__-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Auth failure</span>
+</span><span id="__span_0__-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>$<span class="w"> </span>librofm-downloader
+</span><span id="__span_0__-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>Authentication<span class="w"> </span>failed:<span class="w"> </span>Auth<span class="w"> </span>failed<span class="w"> </span><span class="o">(</span><span class="m">401</span><span class="o">)</span>
+</span><span id="__span_0__-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+</span><span id="__span_0__-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># Library fetch failure</span>
+</span><span id="__span_0__-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>$<span class="w"> </span>librofm-downloader
+</span><span id="__span_0__-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>Failed<span class="w"> </span>to<span class="w"> </span>fetch<span class="w"> </span>library:<span class="w"> </span><span class="m">502</span><span class="w"> </span>Bad<span class="w"> </span>Gateway
 </span></code></pre></div>
 <h3 id="exit-code-130">Exit code 130</h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>$<span class="w"> </span>librofm-downloader
-</span><span id="__span_0__-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>^CDownload<span class="w"> </span>interrupted<span class="w"> </span>by<span class="w"> </span>user<span class="w"> </span><span class="o">(</span>Ctrl+C<span class="o">)</span>.
-</span><span id="__span_0__-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$?</span>
-</span><span id="__span_0__-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="m">130</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>$<span class="w"> </span>librofm-downloader
+</span><span id="__span_0__-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>^CDownload<span class="w"> </span>interrupted<span class="w"> </span>by<span class="w"> </span>user<span class="w"> </span><span class="o">(</span>Ctrl+C<span class="o">)</span>.
+</span><span id="__span_0__-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$?</span>
+</span><span id="__span_0__-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="m">130</span>
 </span></code></pre></div>
 <p>Partial downloads are preserved as <code>.partial</code> files and will be <strong>resumed</strong> on the next run.</p>
 <h2 id="cron-setup">Cron setup</h2>
 <h3 id="basic-daily-sync">Basic daily sync</h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a># m h  dom mon dow   command
-</span><span id="__span_0__-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>0  4  *  *  *       cd /path/to/librofm-downloader &amp;&amp; .venv/bin/librofm-downloader &gt;&gt; /var/log/librofm.log 2&gt;&amp;1
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a># m h  dom mon dow   command
+</span><span id="__span_0__-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>0  4  *  *  *       cd /path/to/librofm-downloader &amp;&amp; .venv/bin/librofm-downloader &gt;&gt; /var/log/librofm.log 2&gt;&amp;1
 </span></code></pre></div>
 <p>Runs every day at 4:00 AM, appends output to a log file.</p>
 <h3 id="with-email-on-failure">With email on failure</h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>0  4  *  *  *       cd /path/to/librofm-downloader &amp;&amp; .venv/bin/librofm-downloader || echo &quot;librofm-downloader failed&quot; | mail -s &quot;DL failure&quot; you@example.com
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>0  4  *  *  *       cd /path/to/librofm-downloader &amp;&amp; .venv/bin/librofm-downloader || echo &quot;librofm-downloader failed&quot; | mail -s &quot;DL failure&quot; you@example.com
 </span></code></pre></div>
 <h3 id="weekly-with-limit">Weekly with limit</h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>0  3  *  *  1       cd /path/to/librofm-downloader &amp;&amp; .venv/bin/librofm-downloader --limit 10 &gt;&gt; /var/log/librofm-weekly.log 2&gt;&amp;1
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>0  3  *  *  1       cd /path/to/librofm-downloader &amp;&amp; .venv/bin/librofm-downloader --limit 10 &gt;&gt; /var/log/librofm-weekly.log 2&gt;&amp;1
 </span></code></pre></div>
 <p>Runs Mondays at 3:00 AM, caps at 10 books.</p>
 <h3 id="systemd-timer-alternative-to-cron">systemd timer (alternative to cron)</h3>
-<div class="language-ini highlight"><pre><span></span><code><span id="__span_0__-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># /etc/systemd/system/librofm-downloader.service</span>
-</span><span id="__span_0__-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">[Unit]</span>
-</span><span id="__span_0__-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="na">Description</span><span class="o">=</span><span class="s">Libro.fm Audiobook Downloader</span>
-</span><span id="__span_0__-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="na">After</span><span class="o">=</span><span class="s">network-online.target</span>
-</span><span id="__span_0__-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
-</span><span id="__span_0__-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="k">[Service]</span>
-</span><span id="__span_0__-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="na">Type</span><span class="o">=</span><span class="s">oneshot</span>
-</span><span id="__span_0__-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/path/to/librofm-downloader</span>
-</span><span id="__span_0__-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="na">ExecStart</span><span class="o">=</span><span class="s">/path/to/librofm-downloader/.venv/bin/librofm-downloader</span>
-</span><span id="__span_0__-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
-</span><span id="__span_0__-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="c1"># /etc/systemd/system/librofm-downloader.timer</span>
-</span><span id="__span_0__-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="k">[Unit]</span>
-</span><span id="__span_0__-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="na">Description</span><span class="o">=</span><span class="s">Run librofm-downloader daily</span>
-</span><span id="__span_0__-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>
-</span><span id="__span_0__-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="k">[Timer]</span>
-</span><span id="__span_0__-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="na">OnCalendar</span><span class="o">=</span><span class="s">daily</span>
-</span><span id="__span_0__-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="na">Persistent</span><span class="o">=</span><span class="s">true</span>
-</span><span id="__span_0__-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>
-</span><span id="__span_0__-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="k">[Install]</span>
-</span><span id="__span_0__-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="na">WantedBy</span><span class="o">=</span><span class="s">timers.target</span>
+<div class="language-ini highlight"><pre><span></span><code><span id="__span_0__-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># /etc/systemd/system/librofm-downloader.service</span>
+</span><span id="__span_0__-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">[Unit]</span>
+</span><span id="__span_0__-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="na">Description</span><span class="o">=</span><span class="s">Libro.fm Audiobook Downloader</span>
+</span><span id="__span_0__-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="na">After</span><span class="o">=</span><span class="s">network-online.target</span>
+</span><span id="__span_0__-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
+</span><span id="__span_0__-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="k">[Service]</span>
+</span><span id="__span_0__-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="na">Type</span><span class="o">=</span><span class="s">oneshot</span>
+</span><span id="__span_0__-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/path/to/librofm-downloader</span>
+</span><span id="__span_0__-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="na">ExecStart</span><span class="o">=</span><span class="s">/path/to/librofm-downloader/.venv/bin/librofm-downloader</span>
+</span><span id="__span_0__-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>
+</span><span id="__span_0__-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="c1"># /etc/systemd/system/librofm-downloader.timer</span>
+</span><span id="__span_0__-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="k">[Unit]</span>
+</span><span id="__span_0__-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="na">Description</span><span class="o">=</span><span class="s">Run librofm-downloader daily</span>
+</span><span id="__span_0__-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>
+</span><span id="__span_0__-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="k">[Timer]</span>
+</span><span id="__span_0__-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="na">OnCalendar</span><span class="o">=</span><span class="s">daily</span>
+</span><span id="__span_0__-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="na">Persistent</span><span class="o">=</span><span class="s">true</span>
+</span><span id="__span_0__-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a>
+</span><span id="__span_0__-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="k">[Install]</span>
+</span><span id="__span_0__-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="na">WantedBy</span><span class="o">=</span><span class="s">timers.target</span>
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>librofm-downloader.timer
-</span><span id="__span_0__-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>journalctl<span class="w"> </span>-u<span class="w"> </span>librofm-downloader<span class="w"> </span>-f
+<div class="language-bash highlight"><pre><span></span><code><span id="__span_0__-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>librofm-downloader.timer
+</span><span id="__span_0__-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>journalctl<span class="w"> </span>-u<span class="w"> </span>librofm-downloader<span class="w"> </span>-f
 </span></code></pre></div>
 <h2 id="tty-vs-non-tty-output">TTY vs non-TTY output</h2>
 <p>The tool auto-detects whether stdout is a terminal:</p>
@@ -1362,7 +1412,7 @@ Check the summary line for <code>failed</code> count.</p>
 <li>Color-coded results (✓ green, ✗ red, ⏭ yellow)</li>
 <li>Progress bars update in-place (no scrolling flood)</li>
 </ul>
-<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Brandon Sanderson - The Way of Kings ████████████████████  67.3% 2.1 MB/s 00:03  45.2 MB
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Brandon Sanderson - The Way of Kings ████████████████████  67.3% 2.1 MB/s 00:03  45.2 MB
 </span></code></pre></div>
 <h3 id="non-tty-cron-pipe-redirect">Non-TTY (cron, pipe, redirect)</h3>
 <ul>
@@ -1370,9 +1420,9 @@ Check the summary line for <code>failed</code> count.</p>
 <li>No color, no progress bar updates</li>
 <li>Same information, machine-friendly format</li>
 </ul>
-<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Downloading: Brandon Sanderson - The Way of Kings (unknown size)
-</span><span id="__span_0__-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>Completed: Brandon Sanderson - The Way of Kings
-</span><span id="__span_0__-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>Summary: 1 downloaded, 0 skipped, 0 failed
+<div class="language-text highlight"><pre><span></span><code><span id="__span_0__-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>Downloading: Brandon Sanderson - The Way of Kings (unknown size)
+</span><span id="__span_0__-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>Completed: Brandon Sanderson - The Way of Kings
+</span><span id="__span_0__-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>Summary: 1 downloaded, 0 skipped, 0 failed
 </span></code></pre></div>
 <p>This means you get nice progress in your terminal and clean logs in cron — <strong>no flags needed</strong>.</p>
 
@@ -1424,10 +1474,10 @@ Check the summary line for <code>failed</code> count.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "content.code.copy", "toc.follow"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "content.code.copy", "toc.follow"], "search": "assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="assets/javascripts/bundle.e71a0d61.min.js"></script>
       
     
   </body>
