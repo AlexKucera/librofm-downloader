@@ -123,6 +123,31 @@ $ librofm-downloader
 - Switch to `m4b_mp3_fallback` to get the MP3 version instead
 - Accept that some books aren't available in M4B format
 
+## Selection issues
+
+### "--select requires an interactive terminal"
+
+**Cause:** You ran `librofm-downloader --select` in a non-interactive environment (cron, piped, SSH without TTY allocation).
+
+**Behavior:**
+- Tool exits immediately with exit code **1**
+- No downloads are attempted
+
+**Fix options:**
+- Run in an interactive terminal (local shell, `ssh -t` for TTY allocation)
+- Use `--limit N` instead for non-interactive capped downloads
+
+```bash
+# Non-interactive alternative: just download the first 5 new books
+librofm-downloader --limit 5
+```
+
+### --limit seems ignored when using --select
+
+**Behavior:** When `--select` is active, `--limit` is superseded — you pick exactly which books to download from the checkbox prompt. A notice is printed confirming this.
+
+**Fix:** This is intentional. Use `--select` to choose books, or use `--limit` alone for automatic capping.
+
 ## History file problems
 
 ### "Corrupt history file download_history.json: ... Starting with empty history."
@@ -223,6 +248,18 @@ Use `--limit` to process smaller batches:
 
 ```bash
 # Download 5 books at a time
+librofm-downloader --limit 5
+```
+
+Or select specific books interactively:
+
+```bash
+librofm-downloader --select
+```
+
+Or limit to the first 5 new books:
+
+```bash
 librofm-downloader --limit 5
 ```
 

@@ -136,3 +136,21 @@ Summary: 5 downloaded, 2 skipped, 0 failed
 - The ZIP file is deleted after extraction
 - Each part supports resume via `Range` headers
 - Parts are downloaded sequentially within each book
+
+### Chapter renaming (MP3 only)
+
+When `rename_chapters` is enabled (default), extracted MP3 files are renamed with chapter titles from the download manifest:
+
+```
+# Before (raw extraction)
+01.mp3  02.mp3  03.mp3
+
+# After (renamed)
+001 - Opening.mp3  002 - The Arrival.mp3  003 - Departure.mp3
+```
+
+- Files are sorted naturally by numeric prefix before renaming
+- Zero-padding matches the widest track number
+- Blank or missing titles fall back to the original filename
+- Titles are sanitized (illegal characters stripped) via the same function used for path components
+- Disable in `config.yaml` with `rename_chapters: false`, or override per-run with `--rename-chapters` on the CLI

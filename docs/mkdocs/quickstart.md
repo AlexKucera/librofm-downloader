@@ -16,13 +16,9 @@ pip install -e .
 
 Requires **Python 3.11+**.
 
-### From source
+For development (includes pytest):
 
 ```bash
-git clone https://github.com/AlexKucera/librofm-downloader.git
-cd librofm-downloader
-python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
 pip install -e ".[dev]"
 ```
 
@@ -63,6 +59,13 @@ librofm:
 
   # Whether to download cover art when available
   download_covers: true
+
+  # Whether to rename MP3 chapter files with titles from the manifest
+  # Only applies when format falls back to MP3 (m4b_mp3_fallback or mp3_only)
+  rename_chapters: true
+
+  # Number of parallel download workers (1 = sequential)
+  workers: 3
 ```
 
 ### secrets.yaml
@@ -91,21 +94,37 @@ This:
 2. Authenticates with Libro.fm via OAuth2 password grant
 3. Fetches your full library (all pages)
 4. Skips books already in `download_history.json` (XDG → CWD search)
-5. Downloads each new book with a progress bar
-6. Downloads each new book (3 parallel workers by default) with a progress bar
-7. Records successful downloads to history
+5. Downloads each new book with up to 3 parallel workers
+6. Records successful downloads to history
+
+### Interactive selection
+
+Pick which books to download from a checkbox list:
+
+```bash
+librofm-downloader --select
+```
+
+This:
+
+1. Fetches your library and filters already-downloaded books
+2. Presents a checkbox prompt (space to toggle, enter to confirm)
+3. Downloads only the books you selected
+
+> [!NOTE]
+> `--select` requires an interactive terminal (TTY). In non-interactive
+> environments (cron, pipes), the tool exits with an error.
+
+When `--select` is active, `--limit` is superseded — you control exactly which books are downloaded.
 
 ### First run output (TTY)
 
 ```
 3 book(s) to download:
 
-Author One - Book Title One ██████████████████████████ 100.0% 2.1 MB/s 00:01  45.2 MB
-  ✓ Book Title One
-Author Two - Another Book     ██████████████████████████ 100.0% 1.8 MB/s 00:02 120.5 MB
-  ✓ Another Book
-Author Three - Third Book      ██████████████████████████ 100.0% 2.3 MB/s 00:00  89.1 MB
-  ✓ Third Book
+Brandon Sanderson - The Way of Kings ██████████████████████████ 100.0% 2.1 MB/s 00:01  45.2 MB
+Author Two - Another Book            ██████████████████████████ 100.0% 1.8 MB/s 00:02 120.5 MB
+Author Three - Third Book            ██████████████████████████ 100.0% 2.3 MB/s 00:00  89.1 MB
 
 Summary: 3 downloaded, 0 skipped, 0 failed
 ```
@@ -129,6 +148,14 @@ Completed: Author Two - Another Book
 Summary: 2 downloaded, 0 skipped, 0 failed
 ```
 
+### Interrupted downloads
+
+Press **Ctrl+C** to gracefully stop:
+
+- First press: in-flight downloads drain to completion, then summary prints
+- Second press: immediate hard exit
+- Partial downloads (`.partial` files) resume automatically on next run
+
 ## What gets downloaded?
 
 Files land under your `output_dir` using this structure:
@@ -147,6 +174,7 @@ audiobooks/
 
 - Books with **cover art or PDF extras** get a subdirectory (`Author/Title/`)
 - Books without extras are flat files (`Author/Title.m4b`)
+- When using MP3 format, chapter files are renamed with titles from the manifest (e.g., `001 - Opening.mp3`, `002 - The Arrival.mp3`)
 - See [Path Patterns](path-patterns.md) for customization options
 
 ## Next steps
