@@ -88,7 +88,7 @@ def _download_one(
 
 
 def download_all_books(
-    raw_books: list[dict],
+    raw_books: list[dict | Book],
     *,
     workers: int,
     download_fn: Callable[[Book], Any],
@@ -99,7 +99,7 @@ def download_all_books(
     """Run downloads for all books using a thread pool.
 
     Args:
-        raw_books: List of raw Libro.fm API book dicts.
+        raw_books: List of raw Libro.fm API book dicts, or pre-converted Book objects.
         workers: Number of parallel worker threads.
         download_fn: Callable accepting a Book, returning Path (success) or None (skipped).
         reporter: Reporter instance with start_download/complete/fail/summary methods.
@@ -113,10 +113,15 @@ def download_all_books(
     if not raw_books:
         return OrchestratorResult()
 
-    # Convert raw dicts to Book objects, preserving order and index
-    books_with_index: list[tuple[int, Book]] = [
-        (i, from_library_row(raw)) for i, raw in enumerate(raw_books)
-    ]
+    # Convert raw dicts to Book objects, preserving order and index.
+    # Accept pre-converted Book objects directly to avoid double-conversion
+    # when select mode has already called from_library_row().
+    books_with_index: list[tuple[int, Book]] = []
+    for i, raw in enumerate(raw_books):
+        if isinstance(raw, Book):
+            books_with_index.append((i, raw))
+        else:
+            books_with_index.append((i, from_library_row(raw)))
 
     downloaded_count = 0
     skipped_count = 0

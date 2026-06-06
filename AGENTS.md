@@ -8,6 +8,8 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- write-log: session-log-index -->
 | Date | Type | File | Summary |
 |------|------|------|---------|
+| 2026-06-06 | issue | [20260606-issue48-wire-selector-into-sync-run-pipeline_log.md](docs/devlog/20260606-issue48-wire-selector-into-sync-run-pipeline_log.md) | **Issue #48 Complete:** Wired `select_books()` into `sync_run.py` pipeline. TTY guard, dict→Book conversion, orchestrator Book passthrough (no double-conversion), `--limit` bypass. Updated CLI help text. **+6 tests, 304 total** · **All pass** · **11/11 AC** |
+| 2026-06-06 | issue | [20260606-issue47-interactive-book-selection-selector-module_log.md](docs/devlog/20260606-issue47-interactive-book-selection-selector-module_log.md) | **Issue #47 Complete:** `selector.py` module with `select_books()` + `_format_row()`. Questionary checkbox prompt, confirmation summary, order preservation, Ctrl+C propagation. **+9 tests** · **All pass** · **10/10 AC** |
 | 2026-06-05 | issue | [20260605-issue44-sync-run-injectable-pipeline_log.md](docs/devlog/20260605-issue44-sync-run-injectable-pipeline_log.md) | **Issue #44 Complete:** Refactored `sync_run()` to injectable pipeline. 4 DI seams (session/history/reporter/download_fn), extracted 2 helpers (`_print_verbose_config`, `_resolve_history_path`), simplified closure. **+10 tests, 172 total** · **All pass** · **7/7 AC** |
 | 2026-06-05 | issue | [20260605-issue45-consolidate-syncrunresult-orchestratorresult_log.md](docs/devlog/20260605-issue45-consolidate-syncrunresult-orchestratorresult_log.md) | **Issue #45 Complete:** Consolidated `SyncRunResult`/`OrchestratorResult` via composition. `SyncRunResult` wraps `OrchestratorResult` + 6 delegating properties. Bridge copy code eliminated. **+2 tests, 174 total** · **All pass** · **4/4 AC** |
 | 2026-06-05 | issue | [20260605-issue43-test-reorganization-cleanup-pass_log.md](docs/devlog/20260605-issue43-test-reorganization-cleanup-pass_log.md) | **Issue #43 Complete:** Test reorganization cleanup. Deleted 13 dup path classes from downloader, moved 2 integration classes progress→sync_run, removed duplicate `TestParallelProgressCallbackWiring`, rescued orphaned method. **−470 net test lines, 374 tests** · **168/168 pass on modified files** · **5/5 AC** |
@@ -51,7 +53,7 @@ They capture what was done, decisions & rationale, gotchas & fixes, and next ste
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **librofm-downloader** (2023 symbols, 3834 relationships, 13 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **librofm-downloader** (2116 symbols, 3907 relationships, 15 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

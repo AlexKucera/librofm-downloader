@@ -66,11 +66,41 @@ class TestSyncRunExists:
             assert result.interrupted is False
 
 
-class TestSyncRunSelectMode:
-    """Select mode (ADR #6) branch point — stub, returns empty result."""
+class TestSyncRunSelectModeTTYGuard:
+    """Select mode requires interactive terminal — no TTY → fatal_error."""
 
-    def test_select_mode_returns_not_implemented_result(self):
-        """select_mode=True → empty SyncRunResult (not yet implemented)."""
+    def test_no_tty_returns_fatal_error(self):
+        """select_mode=True + no TTY → SyncRunResult(fatal_error) with clear message."""
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok_abc"
+
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "9781234567890", "title": "A Book"},
+            ]
+
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            result = sync_run(
+                verbose=False, limit=0, workers=0, select_mode=True,
+            )
+
+            assert isinstance(result, SyncRunResult)
+            assert result.fatal_error is not None
+            assert "--select requires an interactive terminal" in result.fatal_error
+
+    def test_all_caught_up_with_select_mode(self):
+        """select_mode=True + no new books → 'All caught up!' + exit 0 (same as non-select)."""
         with (
             patch("librofm_downloader.sync_run.load_config") as mock_config,
             patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
@@ -83,10 +113,45 @@ class TestSyncRunSelectMode:
 
             mock_instance = mock_client_cls.return_value
             mock_instance.authenticate.return_value = "tok_abc"
+
+            # All books already downloaded
             mock_instance.fetch_library.return_value = [
                 {"isbn": "9781234567890", "title": "A Book"},
             ]
+            mock_history_cls.return_value.is_downloaded.return_value = True
 
+            result = sync_run(
+                verbose=False, limit=0, workers=0, select_mode=True,
+            )
+
+            assert isinstance(result, SyncRunResult)
+            assert result.fatal_error is None
+            assert result.interrupted is False
+            assert result.downloaded_count == 0
+
+class TestSyncRunSelectModeEmptySelection:
+    """select_books() returns empty → clean exit 0, no downloads attempted."""
+
+    def test_empty_selection_returns_clean_result(self):
+        """select_books() returns [] → SyncRunResult with no error, no downloads."""
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.selector.select_books", return_value=[]),
+            patch("sys.stdin.isatty", return_value=True),
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok_abc"
+
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "9781234567890", "title": "A Book"},
+            ]
             mock_history_cls.return_value.is_downloaded.return_value = False
 
             result = sync_run(
@@ -94,10 +159,120 @@ class TestSyncRunSelectMode:
             )
 
             assert isinstance(result, SyncRunResult)
-            assert result.downloaded_count == 0
+            assert result.fatal_error is None
             assert result.interrupted is False
+            assert result.downloaded_count == 0
+
+class TestSyncRunSelectModeSelectedFlow:
+    """Selected Books flow to orchestrator correctly (no double-conversion)."""
+
+    def test_selected_books_passed_to_orchestrator(self):
+        """select_books() returns subset → those Books reach download_all_books."""
+        from librofm_downloader.book import Book
+        from librofm_downloader.orchestrator import OrchestratorResult
+
+        book_a = Book(title="Book A", authors=["Author"], narrators=[], isbn="111")
+        book_b = Book(title="Book B", authors=["Author"], narrators=[], isbn="222")
+
+        # select_books returns only book_a (user deselected book_b)
+        selected = [book_a]
+
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.selector.select_books", return_value=selected),
+            patch("librofm_downloader.sync_run.download_all_books") as mock_download,
+            patch("librofm_downloader.sync_run.DownloadReporter") as mock_reporter_cls,
+            patch("sys.stdin.isatty", return_value=True),
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok_abc"
+
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "111", "title": "Book A"},
+                {"isbn": "222", "title": "Book B"},
+            ]
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            mock_download.return_value = OrchestratorResult(downloaded_count=1)
+
+            result = sync_run(
+                verbose=False, limit=0, workers=0, select_mode=True,
+            )
+
+            # Verify orchestrator received only the selected Book objects
+            assert mock_download.called
+            call_args = mock_download.call_args
+            raw_books_arg = call_args[1]["raw_books"] if "raw_books" in call_args[1] else call_args[0][0]
+            assert len(raw_books_arg) == 1
+            # The argument should be a Book object (not a dict)
+            assert isinstance(raw_books_arg[0], Book)
+            assert raw_books_arg[0].isbn == "111"
+
+            assert result.downloaded_count == 1
+            assert result.fatal_error is None
 
 
+class TestSyncRunSelectModeLimitIgnored:
+    """--limit is ignored when --select is active."""
+
+    def test_limit_not_applied_with_select_mode(self, capsys):
+        """select_mode=True + limit=1 → all books still available for selection."""
+        from librofm_downloader.book import Book
+        from librofm_downloader.orchestrator import OrchestratorResult
+
+        book_a = Book(title="Book A", authors=["Auth"], narrators=[], isbn="111")
+        book_b = Book(title="Book B", authors=["Auth"], narrators=[], isbn="222")
+        book_c = Book(title="Book C", authors=["Auth"], narrators=[], isbn="333")
+        # select_books returns all 3 (user selected all)
+        selected = [book_a, book_b, book_c]
+
+        with (
+            patch("librofm_downloader.sync_run.load_config") as mock_config,
+            patch("librofm_downloader.sync_run.LibroFmSession") as mock_client_cls,
+            patch("librofm_downloader.sync_run.DownloadHistory") as mock_history_cls,
+            patch("librofm_downloader.selector.select_books", return_value=selected),
+            patch("librofm_downloader.sync_run.download_all_books") as mock_download,
+            patch("librofm_downloader.sync_run.DownloadReporter") as mock_reporter_cls,
+            patch("sys.stdin.isatty", return_value=True),
+        ):
+            mock_config.return_value.username = "alice"
+            mock_config.return_value.password = "secret"
+            mock_config.return_value.output_dir = "./audiobooks"
+            mock_config.return_value.format = "m4b_mp3_fallback"
+            mock_config.return_value.workers = 3
+
+            mock_instance = mock_client_cls.return_value
+            mock_instance.authenticate.return_value = "tok_abc"
+
+            mock_instance.fetch_library.return_value = [
+                {"isbn": "111", "title": "Book A"},
+                {"isbn": "222", "title": "Book B"},
+                {"isbn": "333", "title": "Book C"},
+            ]
+            mock_history_cls.return_value.is_downloaded.return_value = False
+
+            mock_download.return_value = OrchestratorResult(downloaded_count=3)
+
+            result = sync_run(
+                verbose=True, limit=1, workers=0, select_mode=True,
+            )
+
+            # All 3 books should reach the selector (limit not applied)
+            select_call_args = mock_download.call_args
+            raw_books_arg = select_call_args[1]["raw_books"] if "raw_books" in select_call_args[1] else select_call_args[0][0]
+            assert len(raw_books_arg) == 3
+
+            # Verbose note should be printed about limit being superseded
+            output = capsys.readouterr().out
+            assert "--limit" in output.lower() or "superseded" in output.lower()
 class TestSyncRunInterrupted:
     """Ctrl+C / interrupted path returns SyncRunResult(interrupted=True)."""
 

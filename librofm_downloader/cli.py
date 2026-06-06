@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument("-w", "--workers", type=int, default=0, metavar="N", help="Parallel workers (0=config)")
     parser.add_argument("--rename-chapters", action="store_true", default=False,
                         help="Rename chapter files (default: use config)")
-    parser.add_argument("--select", action="store_true", default=False, help="Interactive selection [not implemented]")
+    parser.add_argument("--select", action="store_true", default=False, help="Interactive book selection")
     args = parser.parse_args()
     exit_code = run(
         config_path=args.config, secrets_path=args.secrets, history_path=args.history,

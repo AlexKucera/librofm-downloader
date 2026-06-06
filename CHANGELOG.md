@@ -6,7 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- **selector:** Add interactive book selection module `selector.py` with
+  `select_books()` (questionary checkbox prompt, confirmation summary) and
+  `_format_row()` helper. Uses `unsafe_ask()` for Ctrl+C propagation.
+  Row format: `N. Title — Author [Series #N]`.
+  9 tests. Closes #47.
+- **sync_run:** Wire `--select` into download pipeline. TTY guard
+  (non-interactive terminals get error exit 1), dict→Book conversion
+  via `from_library_row()`, selected Books pass to orchestrator
+  without double-conversion, `--limit` bypassed with verbose note.
+  6 integration tests. Closes #48.
+
 ### Fixed
+
+- **sync_run:** Show --limit-superseded notice unconditionally when
+  `--select` is active. Previously the message was gated behind
+  `--verbose`, so non-verbose users had no indication their flag
+  was silently ignored.
 
 - **downloader:** Fix progress bar exceeding 100% on resumed downloads.
   `Content-Length` from a Range response covers only remaining bytes;
